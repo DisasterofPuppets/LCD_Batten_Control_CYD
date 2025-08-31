@@ -2,7 +2,7 @@
 ESP32 Light Controller for customized LED battens using Cheap Yellow Display
 
 Hardware
-- Cheap Yellow Display (ESP32)
+- Cheap Yellow Display (ESP32-2432S028R)
 - 24V 2835 SMD 240LED/M Color 6000L IP20
 - 6A 220V PSU
 - Encoder with button (HW 040) I used a cheap one.
