@@ -5,6 +5,7 @@ Hardware
 - Cheap Yellow Display (ESP32)
 - 24V 2835 SMD 240LED/M Color 6000L IP20
 - 6A 220V PSU
+- Encoder with button (HW 040) I used a cheap one.
 
 WIP, Controller to Adjust the following parameters
 
