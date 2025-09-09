@@ -108,6 +108,9 @@ I selected ESP32 Dev Module as the board.
 
 //------------------------------------------  VARIABLES  ------------------------------------------
 
+static unsigned long lastRotationTime = 0;
+const unsigned long ROTATION_DEBOUNCE_MS = 100; // Adjust as needed if your encoder selection of items in main menu feels off(e.g., 50-150ms).  lower if your encoder moves but selection doesn't)
+
 // Track last user action for screen timeout
 static unsigned long lastActivity = 0;
 static bool screenSleeping = false;
@@ -119,6 +122,7 @@ bool Debug = true;// disable to remove serial prints
 int brightnessPercent = 50;  // default brightness on boot(0-100)
 int tempBrightness = 50;     // temporary brightness while adjusting
 
+int previousSelection = 0; // To track the item that was last hovered/active
 int currentSelection = 0;   // index os selected item
 bool itemActivated = false;  // whether the menu item is active or not
 
@@ -144,18 +148,6 @@ volatile unsigned long lastEncoderBtnPress = 0; // For debouncing
 volatile bool encoderBtnPressed = false;
 volatile int lastCLK = HIGH;
 volatile int lastDT = HIGH;
-
-// Function declarations
-void drawItemBox(int x, int y, int w, int h, uint16_t borderColor, uint16_t bgColor, bool filled);
-void drawBrightness(int yPos, int value, bool isActive, bool isHovered);
-void drawAnimation(int yPos, AnimationType animType, bool isActive, bool isHovered);
-void drawSpeed(int yPos, int value, bool isActive, bool isHovered, bool isGreyedOut);
-void drawNotificationText(int yPos, const String& text);
-void drawFooter(int yPos, const String& text);
-void drawMainMenu();
-
-
-
 
 //-------------------------------------------  SETUP  --------------------------------------------
 
@@ -199,8 +191,9 @@ void setup() {
     Serial.println("CYD ready: portrait, theme applied, PWM attached on GPIO25.");
   }
  // Initial draw of the menu as per GUI_Dark.png
-  drawMainMenu();
+  drawFullMenu();
 }
+
 
 //--------------------------------------------  LOOP  --------------------------------------------
 
@@ -214,46 +207,55 @@ void loop() {
   static unsigned long lastBtnTime = 0;
 
   // Read encoder pins
-  // (Note: clk, dt, sw need to be read here, not as static in function)
   int clk = digitalRead(ENCODER_CLK);
   int dt = digitalRead(ENCODER_DT);
   int sw = digitalRead(ENCODER_SW);
 
   // Button handling (active LOW)
-  if (sw == LOW && (now - lastBtnTime) > btnDebounce) { // Use the 'now' declared above
+  if (sw == LOW && (now - lastBtnTime) > btnDebounce) {
     lastBtnTime = now;
-    encoderBtnPressed = true; // Set flag for pressAction to handle
+    // Call pressAction directly when button is confirmed pressed
+    pressAction(); 
   }
 
   // Encoder step: use falling edge of CLK; DT determines direction
-  if (clk != lastCLK && clk == LOW) { // Falling edge of CLK
-    int direction = (dt != lastDT) ? -1 : 1; // Common logic, might need to be flipped
-    //rotateAction(direction);
+  if (clk != lastCLK && clk == LOW) { // Falling edge of CLK detected
+    // Implement rotation debounce here
+    if (now - lastRotationTime > ROTATION_DEBOUNCE_MS) { 
+      lastRotationTime = now; // Update last rotation time *after* debounce check
+
+      int detectedDirection = (dt != lastDT) ? -1 : 1; // Raw direction from encoder
+
+      // Apply ENCODER_REVERSE if defined as True
+      #if ENCODER_REVERSE == True
+          detectedDirection = -detectedDirection;
+      #endif
+
+      // Call rotateAction directly with the debounced detected direction (1:1 per debounced click)
+      rotateAction(detectedDirection);
+    }
   }
   lastCLK = clk;
   lastDT = dt; // Update lastDT after checking for rotation
 
-  // Handle actions after reading inputs to avoid delays inside input reading
-  if (encoderBtnPressed) {
-    pressAction();
-    encoderBtnPressed = false; // Reset flag
-  }
-
   // --- Scrolling Footer Logic ---
   // Only update and draw the footer if the screen is NOT sleeping
-  if (!screenSleeping && (now - lastScrollUpdateTime >= scrollUpdateInterval)) { // ADDED !screenSleeping check
+  if (!screenSleeping && (now - lastScrollUpdateTime >= scrollUpdateInterval)) { 
     lastScrollUpdateTime = now;
     
-    scrollOffset += scrollSpeedPixels; // Move the text to the left
+    scrollOffset += scrollSpeedPixels; 
 
     if (scrollOffset >= (textPixelWidth + scrollGapPixels)) {
-      scrollOffset = 0; // Reset offset
+      scrollOffset = 0; 
     }
 
     // Redraw the content directly to the sprite with the new offset
     drawFooterContent(footerText); 
-    // Then push the updated sprite to the TFT
-    footerSprite.pushSprite(0, FOOTER_Y); 
+    
+    // Check if screen is still awake before pushing the sprite
+    if (!screenSleeping) {
+        footerSprite.pushSprite(0, FOOTER_Y); 
+    }
   }
   // --- End Scrolling Footer Logic ---
 
@@ -278,7 +280,7 @@ void sleepScreen() {
 // Wake the screen by redrawing the current menu
 void wakeScreen() {
     screenSleeping = false;
-    drawMainMenu();
+    drawFullMenu();
   }
 
 // Reset timer and wake if sleeping
@@ -296,59 +298,133 @@ void checkInactivity() {
 
 //------------------------------------------------------------------- ROTARY FUNCTIONS
 
+// Rotary encoder rotation action
+void rotateAction(int direction) {
+  resetInactivityTimer(); // Reset inactivity timer on any encoder movement
+
+  if (itemActivated) {
+    // --- SCENARIO 1: Adjusting values within an active item ---
+    if (currentSelection == 0) { // Brightness
+      tempBrightness += direction;
+      tempBrightness = constrain(tempBrightness, 0, 100);
+      // Update ONLY the active item's display
+      updateMenuItemDisplay(currentSelection); 
+      if (Debug) Serial.printf("Adjusting Brightness (temp): %d\n", tempBrightness);
+    } else if (currentSelection == 1) { // Animation
+      // For AnimationType, ensure wrap-around (0=NONE, 1=BLINK, 2=LIGHTNING, 3=STROBE)
+      currentAnimation = (AnimationType)((currentAnimation + direction + 4) % 4); // +4 for proper wrap-around with negative direction
+      // Update ONLY the active item's display
+      updateMenuItemDisplay(currentSelection); 
+      if (Debug) Serial.printf("Adjusting Animation (temp): %d\n", currentAnimation);
+    } else if (currentSelection == 2) { // Speed
+      // Adjust speed value (only if not greyed out)
+      if (currentAnimation != NONE) { // Only adjust if Animation is not "None"
+        speedPercent += direction;
+        speedPercent = constrain(speedPercent, 1, 100);
+        // Update ONLY the active item's display
+        updateMenuItemDisplay(currentSelection); 
+        if (Debug) Serial.printf("Adjusting Speed (temp): %d\n", speedPercent);
+      } else {
+        if (Debug) Serial.println("Cannot adjust Speed, Animation is None.");
+      }
+    }
+  } else {
+    // --- SCENARIO 2: Navigating between menu items (when no item is active) ---
+    previousSelection = currentSelection; // Store the currently hovered item BEFORE changing
+
+    currentSelection += direction; // Now 'direction' will be a filtered +1 or -1
+
+    // Wrap-around logic for menu items (0, 1, 2)
+    if (currentSelection < 0) currentSelection = 2;
+    if (currentSelection > 2) currentSelection = 0;
+
+    // "Speed" Item Lockout: If trying to select Speed while Animation is "None", skip it
+    if (currentSelection == 2 && currentAnimation == NONE) {
+        currentSelection += direction; // Try to move to the next item in the same direction
+        if (currentSelection < 0) currentSelection = 2; // Re-wrap if needed
+        if (currentSelection > 2) currentSelection = 0; // Re-wrap if needed
+        if (Debug) Serial.println("Skipped Speed item (Animation is None).");
+    }
+
+    // --- PARTIAL UPDATE LOGIC ---
+    // 1. Redraw the PREVIOUSLY selected item to its default (un-hovered) state
+    updateMenuItemDisplay(previousSelection);
+    // 2. Redraw the NEWLY selected item to its hovered state
+    updateMenuItemDisplay(currentSelection);
+    // --- END PARTIAL UPDATE LOGIC ---
+
+    if (Debug) Serial.printf("Menu Selection: %d\n", currentSelection);
+  }
+
+}
+
 // Button press action (active LOW on ENCODER_SW)
 void pressAction() {
   resetInactivityTimer();
 
-  handleSelection(currentSelection);
+  // If the speed item is greyed out and currently selected,
+  // a button press when NOT already active should do nothing.
+  // This prevents activating a disabled item.
+  if (currentSelection == 2 && currentAnimation == NONE && !itemActivated) {
+      if (Debug) Serial.println("Cannot activate Speed, Animation is None.");
+      return; // Do nothing if trying to activate a greyed-out item
+  }
+
+  itemActivated = !itemActivated; // Toggle the active state
+
+  if (!itemActivated) { // If itemActivated just became false (meaning item was deactivated/confirmed)
+    handleSelection(currentSelection); // Call handleSelection to finalize settings
+  }
+  
+  // Redraw only the current item to reflect its new active/hovered state
+  updateMenuItemDisplay(currentSelection); 
+
+  if (Debug) {
+    Serial.print("Button Pressed. Item ");
+    Serial.print(currentSelection);
+    Serial.print(" ");
+    Serial.println(itemActivated ? "ACTIVATED" : "DEACTIVATED");
+  }
 }
 
 
-void handleSelection(int currentSelection) {
-//  tft.fillScreen(TFT_BLACK); // initial clear
-  
-//get the current selected item
-  if (currentSelection == 1){
-    
+  // This function is called when an item is *deactivated* (button pressed to confirm)
+void handleSelection(int selectedItemIndex) { 
+
+  if (selectedItemIndex == 0){
     if (Debug){
-        Serial.println("Brightness menu selected");
+        Serial.println("Brightness menu confirmed");
     }
-
-    //function here
-
+    // Placeholder for Step 4: Update actual PWM output for brightnessPercent
+    // Example: ledcWrite(0, map(brightnessPercent, 0, 100, 0, 255));
+    drawNotificationText(NOTIFICATION_TEXT_Y, "Brightness set to " + String(brightnessPercent) + "%");
+  }
+  else if (selectedItemIndex == 1){
+    if (Debug){
+        Serial.println("Animation menu confirmed");
+    }
+    // Placeholder for Step 5: Trigger selected animation logic
+    String animName;
+    switch (currentAnimation) {
+        case NONE:      animName = "None";      break;
+        case BLINK:     animName = "Blink";     break;
+        case LIGHTNING: animName = "Lightning"; break;
+        case STROBE:    animName = "Strobe";    break;
+    }
+    drawNotificationText(NOTIFICATION_TEXT_Y, "Animation set to " + animName);
+  }
+  else if (selectedItemIndex == 2){
+    if (Debug){
+        Serial.println("Speed menu confirmed");
+    }
+    // Placeholder for Step 6: Update animation speed logic
+    drawNotificationText(NOTIFICATION_TEXT_Y, "Speed set to " + String(speedPercent) + "");
   }
 
-  else if (currentSelection == 2){
-    if (Debug){
-        Serial.println("Animation menu selected");
-    }
-
-    //function here
-
-  }
-
-  
-
-    else if (currentSelection == 3){
-    if (Debug){
-        Serial.println("Speed menu selected");
-    }
-
-    //function here
-
-  }
-
-  else {
-    currentSelection == 0;
-    if (Debug){
-        Serial.println("No Selection, set to 0");
-    }
-    //action not required
-  }
+}
 
  
-  
-}
+
 
 
 //--------------------------------------------------------------------- MAIN MENU
@@ -533,32 +609,56 @@ void drawFooterContent(const String& text) { // Renamed to clearly indicate it d
 
 //--------------------------------------------------------------------- MAIN MENU
 
-void drawMainMenu(){
-  tft.fillScreen(THEME_CURRENT_COLORS_BG); // Clear screen with background color
+void drawFullMenu(){
+  tft.fillScreen(THEME_CURRENT_COLORS_BG); // Still clears the screen for a full redraw
 
+  // Redraw all menu items using the new helper function
+  updateMenuItemDisplay(0); // Brightness
+  updateMenuItemDisplay(1); // Animation
+  updateMenuItemDisplay(2); // Speed
+
+  // Draw Notification Text (This still clears its own area, which is fine)
+  drawNotificationText(NOTIFICATION_TEXT_Y, "TEMPORARY NOTIFICATION TEXT");
+
+  // Draw Footer (using the sprite, so it's efficient)
+  drawFooterContent(footerText); 
+  if (!screenSleeping) { // Only push sprite if screen is awake
+    footerSprite.pushSprite(0, FOOTER_Y); 
+  }
+}
+
+// Helper function to draw or update a single menu item
+void updateMenuItemDisplay(int itemIndex) {
   // Calculate Y positions for menu items
   int brightnessY = ITEM_MARGIN_TOP;
   int animationY = brightnessY + ITEM_HEIGHT + ITEM_SPACING;
   int speedY = animationY + ITEM_HEIGHT + ITEM_SPACING;
 
-  // Draw Brightness (Mimicking the 'Active' state as per GUI_Dark.png)
-  drawBrightness(brightnessY, brightnessPercent, true, false); 
+  // Determine the Y position for the specific item based on its index
+  int yPos;
+  switch (itemIndex) {
+    case 0: yPos = brightnessY; break; // Brightness
+    case 1: yPos = animationY; break; // Animation
+    case 2: yPos = speedY; break;   // Speed
+    default:
+      if (Debug) Serial.printf("ERROR: Invalid itemIndex %d in updateMenuItemDisplay.\n", itemIndex);
+      return; // Should not happen if logic is correct
+  }
 
-  // Draw Animation (Mimicking the 'Default/Unselected' state as per GUI_Dark.png)
-  drawAnimation(animationY, currentAnimation, false, false); 
+  // Determine the current state for this specific item
+  bool isCurrentActive = (currentSelection == itemIndex && itemActivated);
+  bool isCurrentHovered = (currentSelection == itemIndex && !itemActivated);
+  bool isCurrentGreyedOut = (itemIndex == 2 && currentAnimation == NONE); // Greyed out logic only applies to Speed
 
-  // Draw Speed (Mimicking the 'Greyed out' state as per GUI_Dark.png, as currentAnimation is NONE)
-  drawSpeed(speedY, speedPercent, false, false, (currentAnimation == NONE));
-
-  // Draw Notification Text
-  drawNotificationText(NOTIFICATION_TEXT_Y, "TEMPORARY NOTIFICATION TEXT");
-
-  // --- UPDATED FOOTER DRAWING LOGIC ---
-  // 1. Draw the content to the off-screen sprite
-  drawFooterContent(footerText); 
-  // 2. Push the sprite to the actual display
-  footerSprite.pushSprite(0, FOOTER_Y); 
-  // --- END UPDATED FOOTER DRAWING LOGIC ---
+  // Call the appropriate item drawing function with its calculated state
+  if (itemIndex == 0) { // Brightness
+    drawBrightness(yPos, brightnessPercent, isCurrentActive, isCurrentHovered);
+  } else if (itemIndex == 1) { // Animation
+    drawAnimation(yPos, currentAnimation, isCurrentActive, isCurrentHovered);
+  } else if (itemIndex == 2) { // Speed
+    drawSpeed(yPos, speedPercent, isCurrentActive, isCurrentHovered, isCurrentGreyedOut);
+  }
+  // Note: Notification text and footer are handled separately as they are not "menu items"
 }
 
 
