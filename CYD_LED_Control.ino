@@ -8,7 +8,7 @@ TO DO LIST
 5. Update Animation Menu Item selected functionality
 6. Update Speed Menu Item selected functionality
 7. Update Speed Menu lock / unlock and style logic based on Animation Menu value
-8. Display horizontal scrolling text placeholder
+//8. Display horizontal scrolling text placeholder// stop when screen times out
 9. Set ESP32_NOW and update functions so when a menu item is applied, check for any other ESP32_Now Devices based on pre-configured names and apply the same changes
 
 
@@ -93,8 +93,8 @@ I selected ESP32 Dev Module as the board.
 #define ITEM_SPACING         10
 
 #define NOTIFICATION_TEXT_Y  (ITEM_MARGIN_TOP + (ITEM_HEIGHT + ITEM_SPACING) * 3 + 20) // Below Speed item + some spacing
-#define FOOTER_HEIGHT        20
-#define FOOTER_Y             (SH - FOOTER_HEIGHT - 5) // 5px from bottom
+#define FOOTER_HEIGHT        30
+#define FOOTER_Y             (SH - FOOTER_HEIGHT - -5) // -5px from bottom //dodgy fix to remove the mirror corrupted pixels
 
 // Slider specific
 #define SLIDER_BAR_WIDTH     (ITEM_WIDTH - 60) // Adjust for text "75" and padding
@@ -178,9 +178,18 @@ void setup() {
 
 // Initialize the footer sprite
   footerSprite.createSprite(SW, FOOTER_HEIGHT); // Create a sprite the size of the footer area
-  footerSprite.setFreeFont(&FreeSans9pt7b); // Use a smooth font for sprite text
+  //footerSprite.setFreeFont(&FreeSans9pt7b); // Use a smooth font for sprite text
+  footerSprite.setTextFont(2); 
+  footerSprite.setTextSize(1); 
+  footerSprite.setTextDatum(TL_DATUM); //  Explicitly set Top-Left datum
+
+  // Calculate textPixelWidth *after* setting font properties for the sprite.
+  // This is crucial for accurate scrolling calculations.
+  textPixelWidth = footerSprite.textWidth(footerText); 
   if (Debug) {
     Serial.printf("Footer Sprite created: w=%d, h=%d\n", footerSprite.width(), footerSprite.height());
+    Serial.printf("Calculated footerText width (Font 2, size 1): %d pixels\n", textPixelWidth);
+    Serial.printf("Calculated footerText height (Font 2, size 1): %d pixels\n", footerSprite.fontHeight());
   }
 
     // Begin inactivity count
@@ -231,9 +240,10 @@ void loop() {
   }
 
   // --- Scrolling Footer Logic ---
-  if (now - lastScrollUpdateTime >= scrollUpdateInterval) { // Use the 'now' declared above
+  // Only update and draw the footer if the screen is NOT sleeping
+  if (!screenSleeping && (now - lastScrollUpdateTime >= scrollUpdateInterval)) { // ADDED !screenSleeping check
     lastScrollUpdateTime = now;
-
+    
     scrollOffset += scrollSpeedPixels; // Move the text to the left
 
     if (scrollOffset >= (textPixelWidth + scrollGapPixels)) {
@@ -495,35 +505,30 @@ void drawNotificationText(int yPos, const String& text) {
 // This function now draws *to the sprite*, not directly to the TFT.
 // The sprite will be pushed to the TFT from the loop().
 void drawFooterContent(const String& text) { // Renamed to clearly indicate it draws content to sprite
-    // Clear the sprite with the background color
-    footerSprite.fillSprite(THEME_CURRENT_COLORS_BG); 
+   footerSprite.fillSprite(THEME_CURRENT_COLORS_BG); 
     
     footerSprite.setTextColor(THEME_CURRENT_COLORS_TEXT);
-    // Use the sprite's own font settings (set in setup or here)
-    footerSprite.setTextFont(1); // Uncomment if using built-in fonts
-    footerSprite.setTextSize(1); // Uncomment if using built-in fonts
-    
-    // Calculate text width only once
-    if (textPixelWidth == 0) {
-        // Use sprite's textWidth to ensure consistency
-        textPixelWidth = footerSprite.textWidth(text); 
-        if (Debug) Serial.printf("Footer text width: %d pixels\n", textPixelWidth);
+
+    // Calculate vertical offset for text centering
+    // For Font 2 (16 pixels high) and FOOTER_HEIGHT 25: (25 - 16) / 2 = 4
+    int yTextOffset = (FOOTER_HEIGHT - footerSprite.fontHeight()) / 2; 
+
+    // Determine the starting X position for the first text instance relative to the sprite
+    // This will be negative as the text scrolls left
+    int currentDrawX = 0 - scrollOffset;
+
+    // The total width of one full text segment including the gap for repetition
+    int segmentTotalWidth = textPixelWidth + scrollGapPixels;
+
+    // Draw enough repetitions of the text to cover the entire sprite width seamlessly
+    // We typically need to draw at least two, possibly three, segments to ensure smooth looping.
+    // The loop handles this dynamically.
+    int i = 0;
+    while (currentDrawX + (i * segmentTotalWidth) < SW + segmentTotalWidth) { // Draw until we're past the right edge + one segment
+        footerSprite.setCursor(currentDrawX + (i * segmentTotalWidth), yTextOffset); 
+        footerSprite.print(text);
+        i++;
     }
-
-    // Determine the starting X position for the first text instance
-    int startX = 0 - scrollOffset;
-
-    // Draw the main text and its repetitions to cover the footer width
-    // Draw directly to the sprite
-    footerSprite.setCursor(startX, (FOOTER_HEIGHT / 2) - (footerSprite.fontHeight() / 2)); 
-    footerSprite.print(text); 
-
-    footerSprite.setCursor(startX + textPixelWidth + scrollGapPixels, (FOOTER_HEIGHT / 2) - (footerSprite.fontHeight() / 2)); 
-    footerSprite.print(text); 
-
-    footerSprite.setCursor(startX + (textPixelWidth + scrollGapPixels) * 2, (FOOTER_HEIGHT / 2) - (footerSprite.fontHeight() / 2));
-    footerSprite.print(text);
-
 }
 
 //--------------------------------------------------------------------- MAIN MENU
