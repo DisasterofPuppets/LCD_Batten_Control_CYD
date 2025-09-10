@@ -142,6 +142,10 @@ int speedPercent = 50; // Default speed, though it will be greyed out initially
 int tempSpeed = 50; // temp speed while adjusting
 AnimationType tempAnimation = NONE; 
 
+// --- Animation State Variables ---
+bool blinkState = false; // Current state of the blink (on/off)
+unsigned long lastBlinkToggleTime = 0; // Timestamp of last blink state change
+
 // --- Footer Scrolling Text Variables ---
 String footerText = "MODE: M | Soldiers: 192.16.1.100 / ESP32_001 user: admin We will change this later......"; // Changed to a longer placeholder
 static int scrollOffset = 0;
@@ -178,6 +182,12 @@ void setup() {
   Serial.printf("Panel init OK. w=%d, h=%d, rotation=%d\n",
               tft.width(), tft.height(), tft.getRotation());
   tft.fillScreen(TFT_BLACK);
+
+  // Configure ESP32 LEDC (PWM) using the updated API ---
+  // The new ledcAttach function combines setup and attach to the pin directly.
+  ledcAttach(LED_PWM_PIN, PWM_FREQ, PWM_RESOLUTION); 
+  // Set initial brightness (50% brightness on boot)
+  ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); 
 
 // Initialize the footer sprite
   footerSprite.createSprite(SW, FOOTER_HEIGHT); // Create a sprite the size of the footer area
@@ -278,6 +288,14 @@ void loop() {
   }
   // --- End Scrolling Footer Logic ---
 
+  // --- Animation Runner ---
+  if (currentAnimation == BLINK) {
+      runBlinkAnimation();
+    }
+    // Add else if for other animations here later (Lightning, Strobe)
+
+  // --- End Animation Runner ---
+
 
   // Enter sleep if idle
   checkInactivity();
@@ -295,7 +313,9 @@ void loop() {
 // Blank the entire screen and mark sleeping
 void sleepScreen() {
   screenSleeping = true;
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(TFT_BLACK); // Blank the physical display
+  // IMPORTANT: Do NOT stop PWM or animations here. They should continue running.
+  if (Debug) Serial.println("Screen is now sleeping. Animations (if any) continue running.");
 }
 
 // Wake the screen by redrawing the current menu
@@ -475,6 +495,13 @@ void handleSelection(int selectedItemIndex) {
           case STROBE:    animName = "Strobe";    break;
       }
       drawNotificationText(NOTIFICATION_TEXT_Y, "Animation set to " + animName);
+
+      if (currentAnimation == NONE) {
+        stopCurrentAnimation();
+      } 
+      else if (currentAnimation == BLINK) {
+        startBlinkAnimation(); // Start blink if selected
+      }
 
       // Check if Animation state change affects Speed item's greyed-out status
       // This comparison now works correctly since currentAnimation is updated here.
@@ -762,5 +789,48 @@ void updateMenuItemDisplay(int itemIndex) {
 }
 
 
+
+//------------------------------------------------------------------- ANIMATIONS
+
+// Converts 0-100% brightness to 0-255 PWM value
+int brightnessToPWM(int percent) {
+  return map(percent, 0, 100, 0, (1 << PWM_RESOLUTION) - 1); // Max value for 8-bit is 255
+}
+
+// Stops any currently running animation and sets the LED to a solid brightness
+void stopCurrentAnimation() {
+  currentAnimation = NONE;
+  blinkState = false; // Reset blink state
+  ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent));// Set to solid current brightness
+  if (Debug) Serial.println("Animation stopped. LED set to solid brightness.");
+}
+
+// Starts the blink animation
+void startBlinkAnimation() {
+  currentAnimation = BLINK;
+  blinkState = true; // Start with LED ON
+  lastBlinkToggleTime = millis();
+  ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent));// Initial state: ON
+  if (Debug) Serial.printf("Blink animation started. Speed: %d\n", speedPercent);
+}
+
+// Handles the logic for the Blink animation
+void runBlinkAnimation() {
+  // Map speedPercent (1-100) to an interval (e.g., 100ms fast to 1000ms slow)
+  // Higher speed = shorter interval = faster blink
+  unsigned long blinkInterval = map(speedPercent, 1, 100, 100, 1000); // 100ms to 1000ms
+
+  if (millis() - lastBlinkToggleTime >= blinkInterval) {
+    lastBlinkToggleTime = millis();
+    blinkState = !blinkState; // Toggle LED state
+
+    if (blinkState) {
+      ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); // <--- CHANGED: LEDC_CHANNEL to LED_PWM_PIN
+    } 
+    else {
+      ledcWrite(LED_PWM_PIN, 0); // <--- CHANGED: LEDC_CHANNEL to LED_PWM_PIN
+    }
+  }
+}
 
 
