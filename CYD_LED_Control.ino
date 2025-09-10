@@ -2,12 +2,12 @@
 TO DO LIST
 
 // 1. Display the menu elements as in example GUI_Dark.png 
-2. Confirm Rotary input and button selection works to enter and exit each Menu Item
-3. Ensure Text area (Item 3) displays text from funcions.
+//2. Confirm Rotary input and button selection works to enter and exit each Menu Item
+//3. Ensure Text area (Item 3) displays text from funcions.
 4. Update Brightness Menu Item selected functionality
 5. Update Animation Menu Item selected functionality
 6. Update Speed Menu Item selected functionality
-7. Update Speed Menu lock / unlock and style logic based on Animation Menu value
+//7. Update Speed Menu lock / unlock and style logic based on Animation Menu value
 //8. Display horizontal scrolling text placeholder// stop when screen times out
 9. Set ESP32_NOW and update functions so when a menu item is applied, check for any other ESP32_Now Devices based on pre-configured names and apply the same changes
 
@@ -71,6 +71,7 @@ I selected ESP32 Dev Module as the board.
 #define COLOR_DARK_GREYED_OUT_TEXT    0x5AAB            // Lighter grey for greyed-out text
 #define COLOR_DARK_GREYED_OUT_SLIDER_BG 0x1082          // A very dark grey for the inactive slider track
 #define COLOR_DARK_ARROW_COLOR        TFT_WHITE         // Color for animation arrows
+#define COLOR_DARK_NOTIFICATION_SUCCESS TFT_GREEN // A green color for success messages
 
 // Current theme colors (for easy switching later)
 #define THEME_CURRENT_COLORS_BG             COLOR_DARK_BACKGROUND
@@ -84,6 +85,7 @@ I selected ESP32 Dev Module as the board.
 #define THEME_CURRENT_COLORS_GREYED_OUT_BORDER COLOR_DARK_GREYED_OUT_BORDER
 #define THEME_CURRENT_COLORS_GREYED_OUT_TEXT COLOR_DARK_GREYED_OUT_TEXT
 #define THEME_CURRENT_COLORS_ARROW_COLOR    COLOR_DARK_ARROW_COLOR
+#define THEME_CURRENT_COLORS_NOTIFICATION_SUCCESS COLOR_DARK_NOTIFICATION_SUCCESS
 
 // Layout constants (adjust as needed to match GUI_Dark.png precisely)
 #define ITEM_WIDTH           240
@@ -646,17 +648,28 @@ void drawSpeed(int yPos, int value, bool isActive, bool isHovered, bool isGreyed
 
 //------------------------------------------------------------------- DRAW NOTIFICATION TEXT
 void drawNotificationText(int yPos, const String& text) {
-    // Clear previous text area
-    tft.fillRect(ITEM_MARGIN_X, yPos - 10, ITEM_WIDTH, tft.fontHeight() + 20, THEME_CURRENT_COLORS_BG); // Clear a generous area
+    // Define the full rectangular area for the notification text
+    // The previous Y was yPos - 10, so let's make it a more consistent top edge for clearing.
+    int textAreaX = ITEM_MARGIN_X;
+    int textAreaY = NOTIFICATION_TEXT_Y - (tft.fontHeight() / 2) - 10; // Adjusted top for consistent clearing
+    int textAreaWidth = ITEM_WIDTH;
+    int textAreaHeight = tft.fontHeight() + 20; // Ensure enough height for the text
+
+    // Clear the *entire* text area with the background color
+    tft.fillRect(textAreaX, textAreaY, textAreaWidth, textAreaHeight, THEME_CURRENT_COLORS_BG); 
     
-    tft.setTextColor(THEME_CURRENT_COLORS_TEXT);
+    tft.setTextColor(THEME_CURRENT_COLORS_NOTIFICATION_SUCCESS); // <--- CHANGE: Use success color
     tft.setTextFont(2);
     tft.setTextSize(1);
-    tft.setTextDatum(MC_DATUM); // Center datum
-    tft.drawString(text, SW / 2, yPos);
-    tft.setTextDatum(TL_DATUM); // Reset to top-left
+    
+    // --- NEW: Calculate precise vertical center for the text ---
+    // Using MC_DATUM (Middle-Center) for text, so we just need to calculate the center Y of the area.
+    int textCenterY = textAreaY + (textAreaHeight / 2);
+    
+    tft.setTextDatum(MC_DATUM); // Center datum (already correct)
+    tft.drawString(text, SW / 2, textCenterY); // <--- MODIFIED: Use calculated textCenterY
+    tft.setTextDatum(TL_DATUM); // Reset to top-left for other drawing functions
 }
-
 //------------------------------------------------------------------- DRAW FOOTER
 // This function now draws *to the sprite*, not directly to the TFT.
 // The sprite will be pushed to the TFT from the loop().
@@ -698,7 +711,7 @@ void drawFullMenu(){
   updateMenuItemDisplay(2); // Speed
 
   // Draw Notification Text (This still clears its own area, which is fine)
-  drawNotificationText(NOTIFICATION_TEXT_Y, "TEMPORARY NOTIFICATION TEXT");
+  drawNotificationText(NOTIFICATION_TEXT_Y, ""); //enter text between the "" if you want something displayed in the notifications area on boot
 
   // Draw Footer (using the sprite, so it's efficient)
   drawFooterContent(footerText); 
@@ -747,3 +760,7 @@ void updateMenuItemDisplay(int itemIndex) {
   }
   // Note: Notification text and footer are handled separately as they are not "menu items"
 }
+
+
+
+
