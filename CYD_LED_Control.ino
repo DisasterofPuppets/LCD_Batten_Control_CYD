@@ -111,6 +111,13 @@ I selected ESP32 Dev Module as the board.
 static unsigned long lastRotationTime = 0;
 const unsigned long ROTATION_DEBOUNCE_MS = 100; // Adjust as needed if your encoder selection of items in main menu feels off(e.g., 50-150ms).  lower if your encoder moves but selection doesn't)
 
+// --- Rotary Encoder Acceleration Variables ---
+//Used when controlling the speed / increment uses to move the slider bars
+static unsigned long lastEncoderValueChangeTime = 0; // Tracks time of last value adjustment
+const unsigned long FAST_ROTATION_THRESHOLD_MS = 200; // Time (ms) below which rotation is considered "fast"
+const int COARSE_ADJUSTMENT_STEP = 5; // How many units to jump for a fast rotation (e.g., 5 or 10)
+
+
 // Track last user action for screen timeout
 static unsigned long lastActivity = 0;
 static bool screenSleeping = false;
@@ -130,6 +137,8 @@ bool itemActivated = false;  // whether the menu item is active or not
 enum AnimationType { NONE, BLINK, LIGHTNING, STROBE };
 AnimationType currentAnimation = NONE; 
 int speedPercent = 50; // Default speed, though it will be greyed out initially
+int tempSpeed = 50; // temp speed while adjusting
+AnimationType tempAnimation = NONE; 
 
 // --- Footer Scrolling Text Variables ---
 String footerText = "MODE: M | Soldiers: 192.16.1.100 / ESP32_001 user: admin We will change this later......"; // Changed to a longer placeholder
@@ -194,7 +203,6 @@ void setup() {
   drawFullMenu();
 }
 
-
 //--------------------------------------------  LOOP  --------------------------------------------
 
 void loop() {
@@ -224,7 +232,16 @@ void loop() {
     if (now - lastRotationTime > ROTATION_DEBOUNCE_MS) { 
       lastRotationTime = now; // Update last rotation time *after* debounce check
 
-      int detectedDirection = (dt != lastDT) ? -1 : 1; // Raw direction from encoder
+      // --- IMPROVED DIRECTION DETECTION (SWAPPED FOR CORRECTNESS) ---
+      int currentDT = digitalRead(ENCODER_DT); // Read DT at the moment CLK fell
+      int detectedDirection = 0;
+
+      if (currentDT == HIGH) { 
+          detectedDirection = -1; // <--- SWAPPED THIS FROM 1 TO -1
+      } else { 
+          detectedDirection = 1;  // <--- SWAPPED THIS FROM -1 TO 1
+      }
+      // --- END IMPROVED DIRECTION DETECTION ---
 
       // Apply ENCODER_REVERSE if defined as True
       #if ENCODER_REVERSE == True
@@ -266,6 +283,8 @@ void loop() {
   delay(5); // Small delay to prevent excessive polling
 }
 
+
+
 //--------------------------------------------  FUNCTIONS  ---------------------------------------
 
 
@@ -302,28 +321,55 @@ void checkInactivity() {
 void rotateAction(int direction) {
   resetInactivityTimer(); // Reset inactivity timer on any encoder movement
 
+  // Get current time for acceleration calculation (used for tempBrightness and tempSpeed)
+  unsigned long now = millis(); // Local 'now' is fine here
+
   if (itemActivated) {
     // --- SCENARIO 1: Adjusting values within an active item ---
     if (currentSelection == 0) { // Brightness
-      tempBrightness += direction;
+      int adjustmentAmount = 1; // Default to fine adjustment
+
+      // Calculate time since last brightness adjustment using the global 'lastEncoderValueChangeTime'
+      unsigned long timeSinceLastChange = now - lastEncoderValueChangeTime;
+
+      // If rotation is fast, increase adjustment amount
+      if (timeSinceLastChange < FAST_ROTATION_THRESHOLD_MS) {
+        adjustmentAmount = COARSE_ADJUSTMENT_STEP;
+      }
+      
+      tempBrightness += (direction * adjustmentAmount);
       tempBrightness = constrain(tempBrightness, 0, 100);
+
+      lastEncoderValueChangeTime = now; // Update time of last adjustment
+
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
-      if (Debug) Serial.printf("Adjusting Brightness (temp): %d\n", tempBrightness);
+      if (Debug) Serial.printf("Adjusting Brightness (temp): %d (step: %d, timeSinceLast: %lu ms)\n", tempBrightness, adjustmentAmount, timeSinceLastChange);
     } else if (currentSelection == 1) { // Animation
-      // For AnimationType, ensure wrap-around (0=NONE, 1=BLINK, 2=LIGHTNING, 3=STROBE)
-      currentAnimation = (AnimationType)((currentAnimation + direction + 4) % 4); // +4 for proper wrap-around with negative direction
+      // Adjust tempAnimation, currentAnimation is updated only on confirmation
+      tempAnimation = (AnimationType)((tempAnimation + direction + 4) % 4); // +4 for proper wrap-around with negative direction
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
-      if (Debug) Serial.printf("Adjusting Animation (temp): %d\n", currentAnimation);
+      if (Debug) Serial.printf("Adjusting Animation (temp): %d\n", tempAnimation);
     } else if (currentSelection == 2) { // Speed
-      // Adjust speed value (only if not greyed out)
       if (currentAnimation != NONE) { // Only adjust if Animation is not "None"
-        speedPercent += direction;
-        speedPercent = constrain(speedPercent, 1, 100);
-        // Update ONLY the active item's display
+        int adjustmentAmount = 1; // Default to fine adjustment
+        
+        // Calculate time since last speed adjustment
+        unsigned long timeSinceLastChange = now - lastEncoderValueChangeTime; 
+
+        // If rotation is fast, increase adjustment amount
+        if (timeSinceLastChange < FAST_ROTATION_THRESHOLD_MS) {
+          adjustmentAmount = COARSE_ADJUSTMENT_STEP;
+        }
+
+        tempSpeed += (direction * adjustmentAmount);
+        tempSpeed = constrain(tempSpeed, 1, 100); // Speed is 1-100
+
+        lastEncoderValueChangeTime = now; // Update time of last adjustment
+
         updateMenuItemDisplay(currentSelection); 
-        if (Debug) Serial.printf("Adjusting Speed (temp): %d\n", speedPercent);
+        if (Debug) Serial.printf("Adjusting Speed (temp): %d (step: %d, timeSinceLast: %lu ms)\n", tempSpeed, adjustmentAmount, timeSinceLastChange);
       } else {
         if (Debug) Serial.println("Cannot adjust Speed, Animation is None.");
       }
@@ -332,7 +378,7 @@ void rotateAction(int direction) {
     // --- SCENARIO 2: Navigating between menu items (when no item is active) ---
     previousSelection = currentSelection; // Store the currently hovered item BEFORE changing
 
-    currentSelection += direction; // Now 'direction' will be a filtered +1 or -1
+    currentSelection += direction; // Update to the new selection
 
     // Wrap-around logic for menu items (0, 1, 2)
     if (currentSelection < 0) currentSelection = 2;
@@ -354,9 +400,12 @@ void rotateAction(int direction) {
     // --- END PARTIAL UPDATE LOGIC ---
 
     if (Debug) Serial.printf("Menu Selection: %d\n", currentSelection);
+    
+    // Reset acceleration timer when navigating, so first adjustment after activation is always fine-grained
+    lastEncoderValueChangeTime = 0; // Ensures first turn after entering an item is always 1-step
   }
-
 }
+
 
 // Button press action (active LOW on ENCODER_SW)
 void pressAction() {
@@ -372,7 +421,12 @@ void pressAction() {
 
   itemActivated = !itemActivated; // Toggle the active state
 
-  if (!itemActivated) { // If itemActivated just became false (meaning item was deactivated/confirmed)
+  if (itemActivated) { // If item just became ACTIVE
+    // Initialize temporary values when entering an item
+    if (currentSelection == 0) tempBrightness = brightnessPercent;
+    else if (currentSelection == 1) tempAnimation = currentAnimation; // <--- NEW: Initialize tempAnimation
+    else if (currentSelection == 2) tempSpeed = speedPercent;
+  } else { // If item just became INACTIVE (confirmed)
     handleSelection(currentSelection); // Call handleSelection to finalize settings
   }
   
@@ -385,13 +439,15 @@ void pressAction() {
     Serial.print(" ");
     Serial.println(itemActivated ? "ACTIVATED" : "DEACTIVATED");
   }
+
 }
 
 
   // This function is called when an item is *deactivated* (button pressed to confirm)
 void handleSelection(int selectedItemIndex) { 
 
-  if (selectedItemIndex == 0){
+  if (selectedItemIndex == 0){ // Brightness
+    brightnessPercent = tempBrightness; // Overwrites previous value with adjusted temp value
     if (Debug){
         Serial.println("Brightness menu confirmed");
     }
@@ -399,32 +455,41 @@ void handleSelection(int selectedItemIndex) {
     // Example: ledcWrite(0, map(brightnessPercent, 0, 100, 0, 255));
     drawNotificationText(NOTIFICATION_TEXT_Y, "Brightness set to " + String(brightnessPercent) + "%");
   }
-  else if (selectedItemIndex == 1){
-    if (Debug){
-        Serial.println("Animation menu confirmed");
-    }
-    // Placeholder for Step 5: Trigger selected animation logic
-    String animName;
-    switch (currentAnimation) {
-        case NONE:      animName = "None";      break;
-        case BLINK:     animName = "Blink";     break;
-        case LIGHTNING: animName = "Lightning"; break;
-        case STROBE:    animName = "Strobe";    break;
-    }
-    drawNotificationText(NOTIFICATION_TEXT_Y, "Animation set to " + animName);
-  }
-  else if (selectedItemIndex == 2){
-    if (Debug){
-        Serial.println("Speed menu confirmed");
-    }
-    // Placeholder for Step 6: Update animation speed logic
-    drawNotificationText(NOTIFICATION_TEXT_Y, "Speed set to " + String(speedPercent) + "");
-  }
+  else if (selectedItemIndex == 1){ // Animation
+      if (Debug){
+          Serial.println("Animation menu confirmed");
+      }
+      // Store the *current confirmed* animation state BEFORE updating
+      AnimationType oldAnimation = currentAnimation; 
+      
+      // Update the *confirmed* animation state from the temporary one
+      currentAnimation = tempAnimation; 
 
+      String animName;
+      switch (currentAnimation) { 
+          case NONE:      animName = "None";      break;
+          case BLINK:     animName = "Blink";     break;
+          case LIGHTNING: animName = "Lightning"; break;
+          case STROBE:    animName = "Strobe";    break;
+      }
+      drawNotificationText(NOTIFICATION_TEXT_Y, "Animation set to " + animName);
+
+      // Check if Animation state change affects Speed item's greyed-out status
+      // This comparison now works correctly since currentAnimation is updated here.
+      if (oldAnimation != currentAnimation) { 
+          updateMenuItemDisplay(2); // Explicitly redraw the Speed item
+          if (Debug) Serial.println("Animation changed, redrawing Speed item.");
+      }
+    }
+    else if (selectedItemIndex == 2){ // Speed
+      speedPercent = tempSpeed; // Update the persistent speed with adjusted temp value
+      if (Debug){
+          Serial.println("Speed menu confirmed");
+      }
+      // Placeholder for Step 6: Update animation speed logic (e.g., pass speedPercent to animation handler)
+      drawNotificationText(NOTIFICATION_TEXT_Y, "Speed set to " + String(speedPercent) + "");
+    }
 }
-
- 
-
 
 
 //--------------------------------------------------------------------- MAIN MENU
@@ -436,8 +501,10 @@ void drawItemBox(int x, int y, int w, int h, uint16_t borderColor, uint16_t bgCo
     if (filled) {
         tft.fillRoundRect(x + 1, y + 1, w - 2, h - 2, 4, bgColor); // Smaller radius for fill
     } else {
-        // If not filled, ensure background is cleared within the border if it was previously filled
-        tft.fillRoundRect(x + 1, y + 1, w - 2, h - 2, 4, THEME_CURRENT_COLORS_BG);
+        // If not filled, ensure background is cleared within the border.
+        // Use the passed bgColor, which will be THEME_CURRENT_COLORS_BG for unselected/hovered/greyed-out.
+        // This ensures a complete clear to the intended background color.
+        tft.fillRoundRect(x + 1, y + 1, w - 2, h - 2, 4, bgColor); // <--- MODIFIED: Use passed 'bgColor'
     }
 }
 
@@ -468,6 +535,17 @@ void drawBrightness(int yPos, int value, bool isActive, bool isHovered) {
     // Draw slider fill
     int fillWidth = map(value, 0, 100, 0, SLIDER_BAR_WIDTH);
     tft.fillRect(SLIDER_BAR_X, sliderY, fillWidth, SLIDER_BAR_HEIGHT, THEME_CURRENT_COLORS_SLIDER_FILL);
+
+    // --- NEW: Draw physical indicator for the slider ---
+    if (isActive) { // Only show indicator when the item is active and being adjusted
+        int indicatorX = SLIDER_BAR_X + map(value, 0, 100, 0, SLIDER_BAR_WIDTH - 2); // -2 to keep it within bounds
+        int indicatorY_top = sliderY - 2; // Extend slightly above the bar
+        int indicatorY_bottom = sliderY + SLIDER_BAR_HEIGHT + 2; // Extend slightly below the bar
+        int indicatorWidth = 2; // Width of the indicator line
+
+        tft.fillRect(indicatorX, indicatorY_top, indicatorWidth, indicatorY_bottom - indicatorY_top, TFT_WHITE); // White indicator
+    }
+    // --- END NEW ---
 
     // Draw current value
     tft.setCursor(ITEM_MARGIN_X + ITEM_WIDTH - 40, yPos + 10); // Position "75" to the right
@@ -520,18 +598,20 @@ void drawAnimation(int yPos, AnimationType animType, bool isActive, bool isHover
 void drawSpeed(int yPos, int value, bool isActive, bool isHovered, bool isGreyedOut) {
     uint16_t borderColor = THEME_CURRENT_COLORS_BORDER_DEFAULT; // Default to greyed out if unselectable
     uint16_t textColor = THEME_CURRENT_COLORS_TEXT;
-    uint16_t bgColor = THEME_CURRENT_COLORS_BG;
+    uint16_t bgColor = THEME_CURRENT_COLORS_BG; 
     uint16_t sliderBgColor = THEME_CURRENT_COLORS_SLIDER_BG;
     uint16_t sliderFillColor = THEME_CURRENT_COLORS_SLIDER_FILL;
 
     if (isGreyedOut) {
+        // Aggressively clear the entire item area with the background color
+        tft.fillRect(ITEM_MARGIN_X, yPos, ITEM_WIDTH, ITEM_HEIGHT, THEME_CURRENT_COLORS_BG); 
+        
         borderColor = THEME_CURRENT_COLORS_GREYED_OUT_BORDER;
         textColor = THEME_CURRENT_COLORS_GREYED_OUT_TEXT;
+        bgColor = THEME_CURRENT_COLORS_BG; // <--- ENSURE THIS IS EXPLICITLY SET FOR drawItemBox
         sliderBgColor = COLOR_DARK_GREYED_OUT_SLIDER_BG;
-        sliderFillColor = THEME_CURRENT_COLORS_GREYED_OUT_TEXT;
-        // Also ensure background is cleared if it was previously active
-        tft.fillRoundRect(ITEM_MARGIN_X + 1, yPos + 1, ITEM_WIDTH - 2, ITEM_HEIGHT - 2, 4, THEME_CURRENT_COLORS_BG);
-    } else {
+        sliderFillColor = THEME_CURRENT_COLORS_GREYED_OUT_TEXT; 
+    } else { 
         if (isActive) {
             borderColor = THEME_CURRENT_COLORS_BORDER_ACTIVE;
             bgColor = THEME_CURRENT_COLORS_ITEM_BACKGROUND;
@@ -648,20 +728,22 @@ void updateMenuItemDisplay(int itemIndex) {
   // Determine the current state for this specific item
   bool isCurrentActive = (currentSelection == itemIndex && itemActivated);
   bool isCurrentHovered = (currentSelection == itemIndex && !itemActivated);
-  bool isCurrentGreyedOut = (itemIndex == 2 && currentAnimation == NONE); // Greyed out logic only applies to Speed
+  // Greyed out logic only applies to Speed item (index 2)
+  bool isCurrentGreyedOut = (itemIndex == 2 && currentAnimation == NONE); 
 
   // Call the appropriate item drawing function with its calculated state
   if (itemIndex == 0) { // Brightness
-    drawBrightness(yPos, brightnessPercent, isCurrentActive, isCurrentHovered);
-  } else if (itemIndex == 1) { // Animation
-    drawAnimation(yPos, currentAnimation, isCurrentActive, isCurrentHovered);
-  } else if (itemIndex == 2) { // Speed
-    drawSpeed(yPos, speedPercent, isCurrentActive, isCurrentHovered, isCurrentGreyedOut);
+    drawBrightness(yPos, isCurrentActive ? tempBrightness : brightnessPercent, isCurrentActive, isCurrentHovered);
+  } 
+  else if (itemIndex == 1) { // Animation
+    // If animation item is active, pass tempAnimation for real-time display
+    // Otherwise, pass the confirmed currentAnimation
+    drawAnimation(yPos, isCurrentActive ? tempAnimation : currentAnimation, isCurrentActive, isCurrentHovered);
+  } 
+  else if (itemIndex == 2) { // Speed
+    // If speed item is active, pass tempSpeed for real-time display
+    // Otherwise, pass the confirmed speedPercent
+    drawSpeed(yPos, isCurrentActive ? tempSpeed : speedPercent, isCurrentActive, isCurrentHovered, isCurrentGreyedOut);
   }
   // Note: Notification text and footer are handled separately as they are not "menu items"
 }
-
-
-
-
-
