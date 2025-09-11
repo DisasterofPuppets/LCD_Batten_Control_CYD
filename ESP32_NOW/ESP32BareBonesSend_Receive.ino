@@ -1,4 +1,33 @@
 /*
+
+
+Example update for on serial receive
+
+//--------------------------- YOUR MESSAGE HANDLING HERE ---------------------------
+// Parse comma-separated values and call function
+if (actualMessage.indexOf(',') > 0) {
+  int commaIndex = actualMessage.indexOf(',');
+  
+  String val1Str = actualMessage.substring(0, commaIndex);
+  String val2Str = actualMessage.substring(commaIndex + 1);
+  
+  // Trim whitespace and convert to integers
+  val1Str.trim();
+  val2Str.trim();
+  
+  int var1 = val1Str.toInt();
+  int var2 = val2Str.toInt();
+  
+  // Call your function with parsed values
+  myfunction(var1, var2);
+  
+  Serial.printf("Called myfunction(%d, %d)\n", var1, var2);
+}
+//--------
+
+
+
+
     ESP-NOW Combined Master/Slave
     Dynamic role switching based on user input
     
@@ -13,12 +42,12 @@
 
 /* Definitions */
 #define ESPNOW_WIFI_CHANNEL 6
-#define DEVICE_NAME_PREFIX "ESP_TWO"  // Change this for each device
+#define DEVICE_NAME_PREFIX "ESP_ONE"  // Change this for each device
 
 // Heartbeat timing constants
-const unsigned long DISCOVERY_PERIOD = 30000;  // 30 seconds
-const unsigned long FAST_HEARTBEAT = 5000;      // 5 seconds
-const unsigned long SLOW_HEARTBEAT = 60000;     // 60 seconds
+const unsigned long DISCOVERY_PERIOD = 120000;  // 2 minutes
+const unsigned long FAST_HEARTBEAT = 3000;      // 3 seconds
+const unsigned long SLOW_HEARTBEAT = 45000;     // 45 seconds
 
 /* Broadcast Peer Class */
 class ESP_NOW_Broadcast_Peer : public ESP_NOW_Peer {
@@ -75,7 +104,7 @@ unsigned long lastHeartbeat = 0;
 unsigned long startTime = 0;
 
 ///REMOVE ME AFTER TESTING -------------------------------------------------
-// unsigned long sendtest = 0;
+unsigned long sendtest = 0;
 ///REMOVE ME AFTER TESTING -------------------------------------------------
 
 // Global Objects
@@ -88,9 +117,7 @@ ESP_NOW_Broadcast_Peer broadcast_peer(ESPNOW_WIFI_CHANNEL, WIFI_IF_STA, nullptr)
 // Example: String lastCommand = "";
 //-------------------------------------------------------------------------------
 
-
-
-//---------------------------------------------------------------------------------------- FUNCTIONS --------------------------------------------------------------
+/* Function Definitions */
 void displayDeviceList() {
   Serial.println("\n=== Discovered Devices ===");
   Serial.printf("Total devices: %zu\n", discoveredDevices.size());
@@ -100,7 +127,6 @@ void displayDeviceList() {
   Serial.println("=========================\n");
 }
 
-//--------------------------------------------------------------------------------
 void addDiscoveredDevice(String deviceName) {
   // Check if device already in list
   for (const String& device : discoveredDevices) {
@@ -113,21 +139,16 @@ void addDiscoveredDevice(String deviceName) {
   displayDeviceList();
 }
 
-//--------------------------------------------------------------------------------
 void sendHeartbeat() {
   String heartbeatMsg = deviceName + ":HEARTBEAT";
-  
-  // Extract MAC from device name for display
-  String prefix = "ESP_";
-  String macAddr = deviceName.substring(prefix.length());
-  Serial.printf("HEARTBEAT: ESP_ %s\n", macAddr.c_str());
-  
+  Serial.printf("Heartbeat: %s\n", heartbeatMsg.c_str());
   if (!broadcast_peer.send_message((uint8_t *)heartbeatMsg.c_str(), heartbeatMsg.length() + 1)) {
     Serial.println("ERROR: Failed to send heartbeat");
+  } else {
+    Serial.println("Heartbeat sent successfully");
   }
 }
 
-//--------------------------------------------------------------------------------
 void broadcastMessage(String userMessage) {
   //--------------------------- YOUR MESSAGE PROCESSING HERE ---------------------------
   // Add custom logic before sending (validation, formatting, etc.)
@@ -135,8 +156,8 @@ void broadcastMessage(String userMessage) {
   // Example: userMessage = processCommand(userMessage);
   //-------------------------------------------------------------------------------------
   
-  // Format: "DEVICE_NAME:message"
-  String fullMessage = deviceName + ":MSG:" + userMessage;
+  // Format: "DEVICE_NAMEMSG:message"
+  String fullMessage = deviceName + "MSG:" + userMessage;
   
   Serial.printf("Broadcasting: %s\n", userMessage.c_str());
   
@@ -192,10 +213,15 @@ void register_new_peer(const esp_now_recv_info_t *info, const uint8_t *data, int
     
     // Extract device name from first message
     String message = String((char *)data);
-    int separatorIndex = message.indexOf(':');
     String senderName = "";
-    if (separatorIndex > 0) {
-      senderName = message.substring(0, separatorIndex);
+    
+    if (message.startsWith("HEARTBEAT ")) {
+      senderName = message.substring(10); // Remove "HEARTBEAT "
+    } else {
+      int msgIndex = message.indexOf(" MSG:");
+      if (msgIndex > 0) {
+        senderName = message.substring(0, msgIndex);
+      }
     }
     
     Serial.printf("New peer " MACSTR, MAC2STR(info->src_addr));
@@ -215,11 +241,8 @@ void register_new_peer(const esp_now_recv_info_t *info, const uint8_t *data, int
   }
 }
 
-//---------------------------------------------------------------------------------------- SETUP --------------------------------------------------------------
-
 void setup() {
   Serial.begin(115200);
-  delay(2000); //sanity delay to wait for serial
   
   // Initialize device name after WiFi starts
   WiFi.mode(WIFI_STA);
@@ -263,10 +286,11 @@ void setup() {
   startTime = millis();
   lastHeartbeat = millis();
 
-///REMOVE ME AFTER TESTING ------------------------------------------------- 
-  // sendtest = millis();
+///REMOVE ME AFTER TESTING -------------------------------------------------
+  sendtest = millis();
 ///REMOVE ME AFTER TESTING -------------------------------------------------
 
+  
   // Send initial heartbeat
   sendHeartbeat();
   
@@ -279,8 +303,6 @@ void setup() {
   //--------------------------------------------------------------------------
 }
 
-//---------------------------------------------------------------------------------------- LOOP --------------------------------------------------------------
-
 void loop() {
   // Non-blocking heartbeat
   unsigned long currentTime = millis();
@@ -291,17 +313,17 @@ void loop() {
     sendHeartbeat();
   }
   
-
 ///REMOVE ME AFTER TESTING -------------------------------------------------  
-  // //simulated variable parse 
-  // if (currentTime - sendtest >= DISCOVERY_PERIOD) {
-  //   sendtest = currentTime;
-  //   // Extract MAC from device name for display
-  //   String prefix = "ESP_";
-  //   String macAddr = deviceName.substring(prefix.length());
-  //   String GreetingMsg = "Greetings from ESP_ " + macAddr;
-  //   broadcastMessage(GreetingMsg);
-  // }
+  //simulated variable parse 
+  if (currentTime - sendtest >= DISCOVERY_PERIOD) {
+    sendtest = currentTime;
+    int temperature = 10;
+    int humidity = 20;
+    int pressure = 30;
+    int battery = 40;
+    String TestMsg = String(temperature) + "," + String(humidity) + "," + String(pressure) + "," + String(battery);   //use this for the live stuff
+    broadcastMessage(TestMsg);
+  }
 ///REMOVE ME AFTER TESTING -------------------------------------------------
 
   //--------------------------- YOUR PERIODIC TASKS HERE ---------------------------
