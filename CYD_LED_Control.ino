@@ -4,9 +4,9 @@ TO DO LIST
 // 1. Display the menu elements as in example GUI_Dark.png 
 //2. Confirm Rotary input and button selection works to enter and exit each Menu Item
 //3. Ensure Text area (Item 3) displays text from funcions.
-4. Update Brightness Menu Item selected functionality
+//4. Update Brightness Menu Item selected functionality
 5. Update Animation Menu Item selected functionality
-6. Update Speed Menu Item selected functionality
+//6. Update Speed Menu Item selected functionality
 //7. Update Speed Menu lock / unlock and style logic based on Animation Menu value
 //8. Display horizontal scrolling text placeholder// stop when screen times out
 9. Set ESP32_NOW and update functions so when a menu item is applied, check for any other ESP32_Now Devices based on pre-configured names and apply the same changes
@@ -40,10 +40,15 @@ I selected ESP32 Dev Module as the board.
 // Inactivity timeout (ms)
 #define INACTIVITY_TIMEOUT 60000  
 
-// --- Rotary encoder pins ---
-#define ENCODER_CLK 35  // Blue wire (requires external pull-up)
-#define ENCODER_DT  27  // Orange wire
-#define ENCODER_SW  22  // Yellow wire (active LOW, use INPUT_PULLUP)
+// --- Button GPIO Pins (Matching your new wiring diagram) ---
+#define UP_BTN_PIN    35  // Blue wire from button to ESP32 GPIO 35
+#define DOWN_BTN_PIN  22  // Yellow wire from button to ESP32 GPIO 22
+#define OK_BTN_PIN    27  // Purple wire from button to ESP32 GPIO 27 (SWITCH)
+
+// --- Debounce & Ramping Configuration ---
+const unsigned long BUTTON_DEBOUNCE_MS  = 75;  // Time to ignore bounces after a press
+const unsigned long RAMP_START_DELAY_MS = 300; // Time button must be held before ramping starts
+const unsigned long RAMP_INTERVAL_MS    = 75;  // Time between continuous ramps (controls speed)
 
 // --- PWM config (ESP32 Arduino core v3.x API) ---
 #define LED_PWM_PIN     25
@@ -55,7 +60,9 @@ I selected ESP32 Dev Module as the board.
 
 #define THEME Light // choose a theme from the above options
 
-#define ENCODER_REVERSE False // switch from clockwise to anticlockwise
+// Set to 'true' for UP button to increase values and move up menu, 'false' for UP button to decrease values and move up menu.
+// CHANGED: Setting to 'false' will make the UP button DECREASE values and DOWN button INCREASE values in sub-menus.
+#define SUB_DIR false 
 
 
 // --- Theme Colors (Dark Theme based on GUI_Dark.png) ---
@@ -110,15 +117,27 @@ I selected ESP32 Dev Module as the board.
 
 //------------------------------------------  VARIABLES  ------------------------------------------
 
-static unsigned long lastRotationTime = 0;
-const unsigned long ROTATION_DEBOUNCE_MS = 100; // Adjust as needed if your encoder selection of items in main menu feels off(e.g., 50-150ms).  lower if your encoder moves but selection doesn't)
+// --- Button State Variables (for software debouncing and ramping logic) ---
+// These track the *debounced* state of the buttons
+bool upBtnDebouncedState = HIGH;      // HIGH when not pressed (due to pull-up)
+bool downBtnDebouncedState = HIGH;    // HIGH when not pressed
+bool okBtnDebouncedState = HIGH;      // HIGH when not pressed
 
-// --- Rotary Encoder Acceleration Variables ---
-//Used when controlling the speed / increment uses to move the slider bars
-static unsigned long lastEncoderValueChangeTime = 0; // Tracks time of last value adjustment
-const unsigned long FAST_ROTATION_THRESHOLD_MS = 200; // Time (ms) below which rotation is considered "fast"
-const int COARSE_ADJUSTMENT_STEP = 5; // How many units to jump for a fast rotation (e.g., 5 or 10)
+// These track the *raw* physical state for detecting changes
+bool upBtnRawState = HIGH;
+bool downBtnRawState = HIGH;
+bool okBtnRawState = HIGH;
 
+// These store the timestamp of the last raw state change for debouncing
+unsigned long lastUpBtnRawChangeTime = 0;
+unsigned long lastDownBtnRawChangeTime = 0;
+unsigned long lastOkBtnRawChangeTime = 0;
+
+// Ramping specific timers
+unsigned long upBtnHeldStartTime = 0;   // Time UP button started being held down
+unsigned long downBtnHeldStartTime = 0; // Time DOWN button started being held down
+unsigned long lastUpRampTime = 0;       // Last time UP performed a ramp step
+unsigned long lastDownRampTime = 0;     // Last time DOWN performed a ramp step
 
 // Track last user action for screen timeout
 static unsigned long lastActivity = 0;
@@ -158,11 +177,6 @@ static unsigned long lastScrollUpdateTime = 0;
 // --- TFT_eSprite for Flicker-Free Footer ---
 TFT_eSprite footerSprite = TFT_eSprite(&tft); // Create sprite object (pass a pointer to the main TFT object)
 
-// Rotary encoder state
-volatile unsigned long lastEncoderBtnPress = 0; // For debouncing
-volatile bool encoderBtnPressed = false;
-volatile int lastCLK = HIGH;
-volatile int lastDT = HIGH;
 
 //-------------------------------------------  SETUP  --------------------------------------------
 
@@ -170,11 +184,13 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(ENCODER_CLK, INPUT);
-  pinMode(ENCODER_DT,  INPUT_PULLUP);
-  pinMode(ENCODER_SW,  INPUT_PULLUP);
+  // Configure button pins as inputs.
+  // Using INPUT because you have external 10k pull-up resistors as per the diagram.
+  pinMode(UP_BTN_PIN, INPUT);
+  pinMode(DOWN_BTN_PIN, INPUT);
+  pinMode(OK_BTN_PIN, INPUT); 
 
-    // Display
+  // Display
   tft.init();
   Serial.printf("Panel init OK. w=%d, h=%d, rotation=%d\n",
               tft.width(), tft.height(), tft.getRotation());
@@ -184,20 +200,17 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
 
   // Configure ESP32 LEDC (PWM) using the updated API ---
-  // The new ledcAttach function combines setup and attach to the pin directly.
   ledcAttach(LED_PWM_PIN, PWM_FREQ, PWM_RESOLUTION); 
   // Set initial brightness (50% brightness on boot)
   ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); 
 
-// Initialize the footer sprite
+  // Initialize the footer sprite
   footerSprite.createSprite(SW, FOOTER_HEIGHT); // Create a sprite the size of the footer area
-  //footerSprite.setFreeFont(&FreeSans9pt7b); // Use a smooth font for sprite text
   footerSprite.setTextFont(2); 
   footerSprite.setTextSize(1); 
   footerSprite.setTextDatum(TL_DATUM); //  Explicitly set Top-Left datum
 
   // Calculate textPixelWidth *after* setting font properties for the sprite.
-  // This is crucial for accurate scrolling calculations.
   textPixelWidth = footerSprite.textWidth(footerText); 
   if (Debug) {
     Serial.printf("Footer Sprite created: w=%d, h=%d\n", footerSprite.width(), footerSprite.height());
@@ -205,13 +218,13 @@ void setup() {
     Serial.printf("Calculated footerText height (Font 2, size 1): %d pixels\n", footerSprite.fontHeight());
   }
 
-    // Begin inactivity count
+  // Begin inactivity count
   lastActivity = millis();
   
   if (Debug) {
     Serial.println("CYD ready: portrait, theme applied, PWM attached on GPIO25.");
   }
- // Initial draw of the menu as per GUI_Dark.png
+  // Initial draw of the menu as per GUI_Dark.png
   drawFullMenu();
 }
 
@@ -219,53 +232,87 @@ void setup() {
 
 void loop() {
 
-  // Declare 'now' once at the beginning of the loop
-  unsigned long now = millis();
+  unsigned long now = millis(); // Get current time for all timing checks
 
-  // Poll inputs every cycle (no ISRs)
-  static const unsigned long btnDebounce = 250;
-  static unsigned long lastBtnTime = 0;
+  // --- Read current raw button states ---
+  bool readingUp   = digitalRead(UP_BTN_PIN);
+  bool readingDown = digitalRead(DOWN_BTN_PIN);
+  bool readingOk   = digitalRead(OK_BTN_PIN);
 
-  // Read encoder pins
-  int clk = digitalRead(ENCODER_CLK);
-  int dt = digitalRead(ENCODER_DT);
-  int sw = digitalRead(ENCODER_SW);
-
-  // Button handling (active LOW)
-  if (sw == LOW && (now - lastBtnTime) > btnDebounce) {
-    lastBtnTime = now;
-    // Call pressAction directly when button is confirmed pressed
-    pressAction(); 
+  // --- Process UP button ---
+  if (readingUp != upBtnRawState) { // Raw state changed
+    lastUpBtnRawChangeTime = now;   // Reset debounce timer
   }
-
-  // Encoder step: use falling edge of CLK; DT determines direction
-  if (clk != lastCLK && clk == LOW) { // Falling edge of CLK detected
-    // Implement rotation debounce here
-    if (now - lastRotationTime > ROTATION_DEBOUNCE_MS) { 
-      lastRotationTime = now; // Update last rotation time *after* debounce check
-
-      // --- IMPROVED DIRECTION DETECTION (SWAPPED FOR CORRECTNESS) ---
-      int currentDT = digitalRead(ENCODER_DT); // Read DT at the moment CLK fell
-      int detectedDirection = 0;
-
-      if (currentDT == HIGH) { 
-          detectedDirection = -1; // <--- SWAPPED THIS FROM 1 TO -1
-      } else { 
-          detectedDirection = 1;  // <--- SWAPPED THIS FROM -1 TO 1
+  if ((now - lastUpBtnRawChangeTime) > BUTTON_DEBOUNCE_MS) { // Debounce window passed
+    if (readingUp != upBtnDebouncedState) { // Debounced state has truly changed
+      upBtnDebouncedState = readingUp;
+      if (upBtnDebouncedState == LOW) { // Button is PRESSED (pulled LOW by switch)
+        // Call rotateAction for 'UP' movement/increment.
+        // -1 for UP button to move UP in menu. Value adjustment direction is handled by SUB_DIR.
+        rotateAction(-1); 
+        upBtnHeldStartTime = now;   // Start tracking hold time for ramping
+        lastUpRampTime = now;       // Initialize ramp timer
+      } else { // Button is RELEASED
+        upBtnHeldStartTime = 0;     // Reset hold time
       }
-      // --- END IMPROVED DIRECTION DETECTION ---
-
-      // Apply ENCODER_REVERSE if defined as True
-      #if ENCODER_REVERSE == True
-          detectedDirection = -detectedDirection;
-      #endif
-
-      // Call rotateAction directly with the debounced detected direction (1:1 per debounced click)
-      rotateAction(detectedDirection);
     }
   }
-  lastCLK = clk;
-  lastDT = dt; // Update lastDT after checking for rotation
+  // Ramping logic for UP button (if held)
+  if (upBtnDebouncedState == LOW && upBtnHeldStartTime != 0) { // If button is debounced as pressed and being held
+    if ((now - upBtnHeldStartTime) > RAMP_START_DELAY_MS) {     // After the initial hold delay
+      if ((now - lastUpRampTime) > RAMP_INTERVAL_MS) {           // At the specified ramp speed
+        rotateAction(-1); // Ramp 'UP' movement/increment
+        lastUpRampTime = now;
+      }
+    }
+  }
+
+  // --- Process DOWN button ---
+  if (readingDown != downBtnRawState) {
+    lastDownBtnRawChangeTime = now;
+  }
+  if ((now - lastDownBtnRawChangeTime) > BUTTON_DEBOUNCE_MS) {
+    if (readingDown != downBtnDebouncedState) {
+      downBtnDebouncedState = readingDown;
+      if (downBtnDebouncedState == LOW) { // Button is PRESSED
+        // Call rotateAction for 'DOWN' movement/decrement.
+        // 1 for DOWN button to move DOWN in menu. Value adjustment direction is handled by SUB_DIR.
+        rotateAction(1); 
+        downBtnHeldStartTime = now;
+        lastDownRampTime = now;
+      } else { // Button is RELEASED
+        downBtnHeldStartTime = 0;
+      }
+    }
+  }
+  // Ramping logic for DOWN button (if held)
+  if (downBtnDebouncedState == LOW && downBtnHeldStartTime != 0) {
+    if ((now - downBtnHeldStartTime) > RAMP_START_DELAY_MS) {
+      if ((now - lastDownRampTime) > RAMP_INTERVAL_MS) {
+        rotateAction(1); // Ramp 'DOWN' movement/decrement
+        lastDownRampTime = now;
+      }
+    }
+  }
+
+  // --- Process OK button ---
+  if (readingOk != okBtnRawState) {
+    lastOkBtnRawChangeTime = now;
+  }
+  if ((now - lastOkBtnRawChangeTime) > BUTTON_DEBOUNCE_MS) {
+    if (readingOk != okBtnDebouncedState) {
+      okBtnDebouncedState = readingOk;
+      if (okBtnDebouncedState == LOW) { // Button is PRESSED
+        pressAction(); // Call the existing press action
+      }
+    }
+  }
+
+  // --- Update last raw states for next loop iteration ---
+  upBtnRawState = readingUp;
+  downBtnRawState = readingDown;
+  okBtnRawState = readingOk;
+
 
   // --- Scrolling Footer Logic ---
   // Only update and draw the footer if the screen is NOT sleeping
@@ -291,8 +338,8 @@ void loop() {
   // --- Animation Runner ---
   if (currentAnimation == BLINK) {
       runBlinkAnimation();
-    }
-    // Add else if for other animations here later (Lightning, Strobe)
+  }
+  // Add else if for other animations here later (Lightning, Strobe)
 
   // --- End Animation Runner ---
 
@@ -322,7 +369,7 @@ void sleepScreen() {
 void wakeScreen() {
     screenSleeping = false;
     drawFullMenu();
-  }
+}
 
 // Reset timer and wake if sleeping
 void resetInactivityTimer() {
@@ -337,74 +384,72 @@ void checkInactivity() {
   }
 }
 
-//------------------------------------------------------------------- ROTARY FUNCTIONS
+//------------------------------------------------------------------- BUTTON FUNCTIONS (replaces Rotary Logic)
 
-// Rotary encoder rotation action
+// Button rotation action (triggered by UP/DOWN button presses/ramps)
 void rotateAction(int direction) {
-  resetInactivityTimer(); // Reset inactivity timer on any encoder movement
+  resetInactivityTimer(); // Reset inactivity timer on any button movement
 
-  // Get current time for acceleration calculation (used for tempBrightness and tempSpeed)
-  unsigned long now = millis(); // Local 'now' is fine here
+  // The 'direction' here will be -1 for UP button (moving up menu)
+  // and 1 for DOWN button (moving down menu).
 
   if (itemActivated) {
-    // --- SCENARIO 1: Adjusting values within an active item ---
+    // We are in a sub-menu, adjusting values
+    int adjustmentAmount = 1; // Default to fine adjustment
+    int effectiveDirection = direction;
+
+    // Based on SUB_DIR = false:
+    // If UP is pressed (direction -1), effectiveDirection remains -1 (decreases value).
+    // If DOWN is pressed (direction 1), effectiveDirection remains 1 (increases value).
+    if (SUB_DIR) { 
+        effectiveDirection = -direction; 
+    }
+
+// --- BRIGHTNESS MENU: Selected ---
     if (currentSelection == 0) { // Brightness
-      int adjustmentAmount = 1; // Default to fine adjustment
-
-      // Calculate time since last brightness adjustment using the global 'lastEncoderValueChangeTime'
-      unsigned long timeSinceLastChange = now - lastEncoderValueChangeTime;
-
-      // If rotation is fast, increase adjustment amount
-      if (timeSinceLastChange < FAST_ROTATION_THRESHOLD_MS) {
-        adjustmentAmount = COARSE_ADJUSTMENT_STEP;
-      }
-      
-      tempBrightness += (direction * adjustmentAmount);
+      tempBrightness += (effectiveDirection * adjustmentAmount);
       tempBrightness = constrain(tempBrightness, 0, 100);
-
-      lastEncoderValueChangeTime = now; // Update time of last adjustment
 
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
-      if (Debug) Serial.printf("Adjusting Brightness (temp): %d (step: %d, timeSinceLast: %lu ms)\n", tempBrightness, adjustmentAmount, timeSinceLastChange);
+      if (Debug) Serial.printf("Adjusting Brightness (temp): %d\n", tempBrightness);
+
+
+// --- ANIMATION MENU: Selected ---
     } else if (currentSelection == 1) { // Animation
       // Adjust tempAnimation, currentAnimation is updated only on confirmation
-      tempAnimation = (AnimationType)((tempAnimation + direction + 4) % 4); // +4 for proper wrap-around with negative direction
+      // +4 for proper wrap-around with negative direction
+      tempAnimation = (AnimationType)((tempAnimation + direction + 4) % 4); 
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
       if (Debug) Serial.printf("Adjusting Animation (temp): %d\n", tempAnimation);
+
+
+
+// --- SPEED MENU: Selected ---
     } else if (currentSelection == 2) { // Speed
       if (currentAnimation != NONE) { // Only adjust if Animation is not "None"
-        int adjustmentAmount = 1; // Default to fine adjustment
-        
-        // Calculate time since last speed adjustment
-        unsigned long timeSinceLastChange = now - lastEncoderValueChangeTime; 
-
-        // If rotation is fast, increase adjustment amount
-        if (timeSinceLastChange < FAST_ROTATION_THRESHOLD_MS) {
-          adjustmentAmount = COARSE_ADJUSTMENT_STEP;
-        }
-
-        tempSpeed += (direction * adjustmentAmount);
+        // If SUB_DIR is false, effectiveDirection is simply 'direction'
+        tempSpeed += (effectiveDirection * adjustmentAmount); 
         tempSpeed = constrain(tempSpeed, 1, 100); // Speed is 1-100
 
-        lastEncoderValueChangeTime = now; // Update time of last adjustment
-
         updateMenuItemDisplay(currentSelection); 
-        if (Debug) Serial.printf("Adjusting Speed (temp): %d (step: %d, timeSinceLast: %lu ms)\n", tempSpeed, adjustmentAmount, timeSinceLastChange);
+        if (Debug) Serial.printf("Adjusting Speed (temp): %d\n", tempSpeed);
       } else {
         if (Debug) Serial.println("Cannot adjust Speed, Animation is None.");
       }
     }
   } else {
-    // --- SCENARIO 2: Navigating between menu items (when no item is active) ---
+    // We are in the main menu, navigating between items
+// --- MAIN MENU: Navigating between menu items (when no item is active) ---
     previousSelection = currentSelection; // Store the currently hovered item BEFORE changing
 
     currentSelection += direction; // Update to the new selection
+    // Direction: -1 for UP (moves up list), 1 for DOWN (moves down list)
 
     // Wrap-around logic for menu items (0, 1, 2)
-    if (currentSelection < 0) currentSelection = 2;
-    if (currentSelection > 2) currentSelection = 0;
+    if (currentSelection < 0) currentSelection = 2; // Up from 0 goes to 2
+    if (currentSelection > 2) currentSelection = 0; // Down from 2 goes to 0
 
     // "Speed" Item Lockout: If trying to select Speed while Animation is "None", skip it
     if (currentSelection == 2 && currentAnimation == NONE) {
@@ -422,14 +467,11 @@ void rotateAction(int direction) {
     // --- END PARTIAL UPDATE LOGIC ---
 
     if (Debug) Serial.printf("Menu Selection: %d\n", currentSelection);
-    
-    // Reset acceleration timer when navigating, so first adjustment after activation is always fine-grained
-    lastEncoderValueChangeTime = 0; // Ensures first turn after entering an item is always 1-step
   }
 }
 
 
-// Button press action (active LOW on ENCODER_SW)
+// Button press action (active LOW on OK_BTN_PIN)
 void pressAction() {
   resetInactivityTimer();
 
@@ -446,7 +488,7 @@ void pressAction() {
   if (itemActivated) { // If item just became ACTIVE
     // Initialize temporary values when entering an item
     if (currentSelection == 0) tempBrightness = brightnessPercent;
-    else if (currentSelection == 1) tempAnimation = currentAnimation; // <--- NEW: Initialize tempAnimation
+    else if (currentSelection == 1) tempAnimation = currentAnimation; // Initialize tempAnimation
     else if (currentSelection == 2) tempSpeed = speedPercent;
   } else { // If item just became INACTIVE (confirmed)
     handleSelection(currentSelection); // Call handleSelection to finalize settings
@@ -456,7 +498,7 @@ void pressAction() {
   updateMenuItemDisplay(currentSelection); 
 
   if (Debug) {
-    Serial.print("Button Pressed. Item ");
+    Serial.print("OK Button Pressed. Item ");
     Serial.print(currentSelection);
     Serial.print(" ");
     Serial.println(itemActivated ? "ACTIVATED" : "DEACTIVATED");
@@ -465,16 +507,15 @@ void pressAction() {
 }
 
 
-  // This function is called when an item is *deactivated* (button pressed to confirm)
+// This function is called when an item is *deactivated* (button pressed to confirm)
 void handleSelection(int selectedItemIndex) { 
 
   if (selectedItemIndex == 0){ // Brightness
     brightnessPercent = tempBrightness; // Overwrites previous value with adjusted temp value
+    ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); // Update PWM
     if (Debug){
-        Serial.println("Brightness menu confirmed");
+        Serial.printf("Brightness menu confirmed: %d%%\n", brightnessPercent);
     }
-    // Placeholder for Step 4: Update actual PWM output for brightnessPercent
-    // Example: ledcWrite(0, map(brightnessPercent, 0, 100, 0, 255));
     drawNotificationText(NOTIFICATION_TEXT_Y, "Brightness set to " + String(brightnessPercent) + "%");
   }
   else if (selectedItemIndex == 1){ // Animation
@@ -504,7 +545,6 @@ void handleSelection(int selectedItemIndex) {
       }
 
       // Check if Animation state change affects Speed item's greyed-out status
-      // This comparison now works correctly since currentAnimation is updated here.
       if (oldAnimation != currentAnimation) { 
           updateMenuItemDisplay(2); // Explicitly redraw the Speed item
           if (Debug) Serial.println("Animation changed, redrawing Speed item.");
@@ -513,9 +553,8 @@ void handleSelection(int selectedItemIndex) {
     else if (selectedItemIndex == 2){ // Speed
       speedPercent = tempSpeed; // Update the persistent speed with adjusted temp value
       if (Debug){
-          Serial.println("Speed menu confirmed");
+          Serial.printf("Speed menu confirmed: %d\n", speedPercent);
       }
-      // Placeholder for Step 6: Update animation speed logic (e.g., pass speedPercent to animation handler)
       drawNotificationText(NOTIFICATION_TEXT_Y, "Speed set to " + String(speedPercent) + "");
     }
 }
@@ -533,7 +572,7 @@ void drawItemBox(int x, int y, int w, int h, uint16_t borderColor, uint16_t bgCo
         // If not filled, ensure background is cleared within the border.
         // Use the passed bgColor, which will be THEME_CURRENT_COLORS_BG for unselected/hovered/greyed-out.
         // This ensures a complete clear to the intended background color.
-        tft.fillRoundRect(x + 1, y + 1, w - 2, h - 2, 4, bgColor); // <--- MODIFIED: Use passed 'bgColor'
+        tft.fillRoundRect(x + 1, y + 1, w - 2, h - 2, 4, bgColor); // MODIFIED: Use passed 'bgColor'
     }
 }
 
@@ -565,7 +604,7 @@ void drawBrightness(int yPos, int value, bool isActive, bool isHovered) {
     int fillWidth = map(value, 0, 100, 0, SLIDER_BAR_WIDTH);
     tft.fillRect(SLIDER_BAR_X, sliderY, fillWidth, SLIDER_BAR_HEIGHT, THEME_CURRENT_COLORS_SLIDER_FILL);
 
-    // --- NEW: Draw physical indicator for the slider ---
+    // --- Draw physical indicator for the slider ---
     if (isActive) { // Only show indicator when the item is active and being adjusted
         int indicatorX = SLIDER_BAR_X + map(value, 0, 100, 0, SLIDER_BAR_WIDTH - 2); // -2 to keep it within bounds
         int indicatorY_top = sliderY - 2; // Extend slightly above the bar
@@ -637,7 +676,7 @@ void drawSpeed(int yPos, int value, bool isActive, bool isHovered, bool isGreyed
         
         borderColor = THEME_CURRENT_COLORS_GREYED_OUT_BORDER;
         textColor = THEME_CURRENT_COLORS_GREYED_OUT_TEXT;
-        bgColor = THEME_CURRENT_COLORS_BG; // <--- ENSURE THIS IS EXPLICITLY SET FOR drawItemBox
+        bgColor = THEME_CURRENT_COLORS_BG; // ENSURE THIS IS EXPLICITLY SET FOR drawItemBox
         sliderBgColor = COLOR_DARK_GREYED_OUT_SLIDER_BG;
         sliderFillColor = THEME_CURRENT_COLORS_GREYED_OUT_TEXT; 
     } else { 
@@ -676,7 +715,6 @@ void drawSpeed(int yPos, int value, bool isActive, bool isHovered, bool isGreyed
 //------------------------------------------------------------------- DRAW NOTIFICATION TEXT
 void drawNotificationText(int yPos, const String& text) {
     // Define the full rectangular area for the notification text
-    // The previous Y was yPos - 10, so let's make it a more consistent top edge for clearing.
     int textAreaX = ITEM_MARGIN_X;
     int textAreaY = NOTIFICATION_TEXT_Y - (tft.fontHeight() / 2) - 10; // Adjusted top for consistent clearing
     int textAreaWidth = ITEM_WIDTH;
@@ -685,7 +723,7 @@ void drawNotificationText(int yPos, const String& text) {
     // Clear the *entire* text area with the background color
     tft.fillRect(textAreaX, textAreaY, textAreaWidth, textAreaHeight, THEME_CURRENT_COLORS_BG); 
     
-    tft.setTextColor(THEME_CURRENT_COLORS_NOTIFICATION_SUCCESS); // <--- CHANGE: Use success color
+    tft.setTextColor(THEME_CURRENT_COLORS_NOTIFICATION_SUCCESS); // CHANGE: Use success color
     tft.setTextFont(2);
     tft.setTextSize(1);
     
@@ -694,7 +732,7 @@ void drawNotificationText(int yPos, const String& text) {
     int textCenterY = textAreaY + (textAreaHeight / 2);
     
     tft.setTextDatum(MC_DATUM); // Center datum (already correct)
-    tft.drawString(text, SW / 2, textCenterY); // <--- MODIFIED: Use calculated textCenterY
+    tft.drawString(text, SW / 2, textCenterY); // MODIFIED: Use calculated textCenterY
     tft.setTextDatum(TL_DATUM); // Reset to top-left for other drawing functions
 }
 //------------------------------------------------------------------- DRAW FOOTER
@@ -825,12 +863,10 @@ void runBlinkAnimation() {
     blinkState = !blinkState; // Toggle LED state
 
     if (blinkState) {
-      ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); // <--- CHANGED: LEDC_CHANNEL to LED_PWM_PIN
+      ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); 
     } 
     else {
-      ledcWrite(LED_PWM_PIN, 0); // <--- CHANGED: LEDC_CHANNEL to LED_PWM_PIN
+      ledcWrite(LED_PWM_PIN, 0); 
     }
   }
 }
-
-
