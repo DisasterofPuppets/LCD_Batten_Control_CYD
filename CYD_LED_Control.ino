@@ -60,8 +60,9 @@ const unsigned long RAMP_INTERVAL_MS    = 75;  // Time between continuous ramps 
 
 #define THEME Light // choose a theme from the above options
 
-// Set to 'true' for UP button to increase values and move up menu, 'false' for UP button to decrease values and move up menu.
-// CHANGED: Setting to 'false' will make the UP button DECREASE values and DOWN button INCREASE values in sub-menus.
+// Set to 'true' to invert value adjustment direction when in sub-menus (brightness/speed).
+// If SUB_DIR is 'false', UP button (direction -1) will DECREASE values,
+// and DOWN button (direction 1) will INCREASE values.
 #define SUB_DIR false 
 
 
@@ -401,6 +402,7 @@ void rotateAction(int direction) {
     // Based on SUB_DIR = false:
     // If UP is pressed (direction -1), effectiveDirection remains -1 (decreases value).
     // If DOWN is pressed (direction 1), effectiveDirection remains 1 (increases value).
+    // This matches the user's request for UP to decrease and DOWN to increase values.
     if (SUB_DIR) { 
         effectiveDirection = -direction; 
     }
@@ -417,8 +419,9 @@ void rotateAction(int direction) {
 
 // --- ANIMATION MENU: Selected ---
     } else if (currentSelection == 1) { // Animation
-      // Adjust tempAnimation, currentAnimation is updated only on confirmation
-      // +4 for proper wrap-around with negative direction
+      // For animation, 'direction' (-1 for UP, 1 for DOWN) is used directly for cycling.
+      // UP button moves backward in the animation list, DOWN button moves forward.
+      // +4 for proper wrap-around with negative direction.
       tempAnimation = (AnimationType)((tempAnimation + direction + 4) % 4); 
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
@@ -429,7 +432,8 @@ void rotateAction(int direction) {
 // --- SPEED MENU: Selected ---
     } else if (currentSelection == 2) { // Speed
       if (currentAnimation != NONE) { // Only adjust if Animation is not "None"
-        // If SUB_DIR is false, effectiveDirection is simply 'direction'
+        // If SUB_DIR is false, effectiveDirection is simply 'direction'.
+        // UP button (direction -1) decreases speed, DOWN button (direction 1) increases speed.
         tempSpeed += (effectiveDirection * adjustmentAmount); 
         tempSpeed = constrain(tempSpeed, 1, 100); // Speed is 1-100
 
