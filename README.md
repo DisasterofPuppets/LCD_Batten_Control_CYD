@@ -3,13 +3,22 @@ ESP32 Light Controller for customized LED battens using Cheap Yellow Display
 
 Hardware
 - Cheap Yellow Display (ESP32-2432S028R)
-- 24V 2835 SMD 240LED/M Color 6000L IP20
+- 24V 2835 SMD 240LED/M Color 6000L IP20 
 - 6A 220V PSU
-- Encoder with button (HW 040) I used a cheap one.
+- High-Power Dual MOSFET Switch (Two parallel N-Channel logic compatible MOSFets with lod RDs(on)) I'm using one labelled 'XY-Mos'
+- 24V to 5V compatible step-down module
+- 3 x temporary switches
+- 3 x 10k Resistors
+- 3 x 100nf ceramic capacitor
+- Power switch with inbuilt light (24v compatible)
 
-WIP, Controller to Adjust the following parameters
+Total amount of LED lights per Batten
 
-Brightness
-Animations
-ESP32 Now Sync mode (to other light(s)
-Misc tbd
+SMD 240LED/M @ 24V
+- 22 LEDS Per Row, 
+- 2 Rows per Batten
+- 44 LEDS per Batten
+-6 Battens
+Grand total of 264 LEDs per Completed Light. 
+( I Have 2, but the maximum will be 264 LEDs per PSU)
+
