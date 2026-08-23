@@ -23,3 +23,5 @@ Grand total of 264 LEDs per Completed Light.
 ( I Have 2, but the maximum will be 264 LEDs per PSU)
 
 *SCHEMATIC
+
+<img src="https://github.com/DisasterofPuppets/LCD_Batten_Control_CYD/blob/main/CYD%20-%20Batten%20Lights%20with%20Switches_bb.png?raw=true"</img>
