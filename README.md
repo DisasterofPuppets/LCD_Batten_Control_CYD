@@ -5,7 +5,7 @@ Hardware
 - Cheap Yellow Display (ESP32-2432S028R)
 - 24V 2835 SMD 240LED/M Color 6000L IP20 
 - 6A 220V PSU
-- High-Power Dual MOSFET Switch (Two parallel N-Channel logic compatible MOSFets with lod RDs(on)) I'm using one labelled 'XY-Mos'
+- High-Power Dual MOSFET Switch (Two parallel N-Channel logic compatible MOSFETS with lod RDs(on)) I'm using one labelled 'XY-Mos'
 - 24V to 5V compatible step-down module
 - 3 x temporary switches
 - 3 x 10k Resistors
@@ -24,4 +24,4 @@ Grand total of 264 LEDs per Completed Light.
 
 *SCHEMATIC
 
-<img src="https://github.com/DisasterofPuppets/LCD_Batten_Control_CYD/blob/main/CYD%20-%20Batten%20Lights%20with%20Switches_bb.png?raw=true"</img>
+![Schematic](Batten Lights with Switches_bb.png)
