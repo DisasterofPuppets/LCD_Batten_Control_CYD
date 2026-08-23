@@ -22,3 +22,4 @@ SMD 240LED/M @ 24V
 Grand total of 264 LEDs per Completed Light. 
 ( I Have 2, but the maximum will be 264 LEDs per PSU)
 
+*SCHEMATIC
