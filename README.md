@@ -24,4 +24,4 @@ Grand total of 264 LEDs per Completed Light.
 
 *SCHEMATIC
 
-![Schematic](Batten Lights with Switches_bb.png)
+![Schematic](https://github.com/DisasterofPuppets/LCD_Batten_Control_CYD/blob/main/CYD%20-%20Batten%20Lights%20with%20Switches_bb.png)
