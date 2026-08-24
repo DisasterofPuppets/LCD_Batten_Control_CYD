@@ -50,6 +50,13 @@ const unsigned long BUTTON_DEBOUNCE_MS  = 75;  // Time to ignore bounces after a
 const unsigned long RAMP_START_DELAY_MS = 300; // Time button must be held before ramping starts
 const unsigned long RAMP_INTERVAL_MS    = 75;  // Time between continuous ramps (controls speed)
 
+// --- Ramp acceleration (step size grows the longer the button stays held) ---
+const unsigned long RAMP_ACCEL_STAGE1_MS = 1500; // total hold time before step size first increases
+const unsigned long RAMP_ACCEL_STAGE2_MS = 3000; // total hold time before step size increases again
+const int RAMP_STEP_STAGE0 = 1;  // step size while held < STAGE1
+const int RAMP_STEP_STAGE1 = 5;  // step size while STAGE1 <= held < STAGE2
+const int RAMP_STEP_STAGE2 = 10; // step size once held >= STAGE2
+
 // --- PWM config (ESP32 Arduino core v3.x API) ---
 #define LED_PWM_PIN     25
 #define PWM_FREQ        5000
@@ -261,7 +268,7 @@ void loop() {
       if (upBtnDebouncedState == LOW) { // Button is PRESSED (pulled LOW by switch)
         // Call rotateAction for 'UP' movement/increment.
         // -1 for UP button to move UP in menu. Value adjustment direction is handled by SUB_DIR.
-        rotateAction(-1); 
+        rotateAction(-1, 1); // Initial tap always moves by 1
         upBtnHeldStartTime = now;   // Start tracking hold time for ramping
         lastUpRampTime = now;       // Initialize ramp timer
       } else { // Button is RELEASED
@@ -269,11 +276,11 @@ void loop() {
       }
     }
   }
-  // Ramping logic for UP button (if held)
+  // Ramping logic for UP button (if held) - step size grows the longer it's held
   if (upBtnDebouncedState == LOW && upBtnHeldStartTime != 0) { // If button is debounced as pressed and being held
     if ((now - upBtnHeldStartTime) > RAMP_START_DELAY_MS) {     // After the initial hold delay
       if ((now - lastUpRampTime) > RAMP_INTERVAL_MS) {           // At the specified ramp speed
-        rotateAction(-1); // Ramp 'UP' movement/increment
+        rotateAction(-1, getRampStepSize(now - upBtnHeldStartTime)); // Ramp 'UP' movement/increment
         lastUpRampTime = now;
       }
     }
@@ -289,7 +296,7 @@ void loop() {
       if (downBtnDebouncedState == LOW) { // Button is PRESSED
         // Call rotateAction for 'DOWN' movement/decrement.
         // 1 for DOWN button to move DOWN in menu. Value adjustment direction is handled by SUB_DIR.
-        rotateAction(1); 
+        rotateAction(1, 1); // Initial tap always moves by 1
         downBtnHeldStartTime = now;
         lastDownRampTime = now;
       } else { // Button is RELEASED
@@ -297,11 +304,11 @@ void loop() {
       }
     }
   }
-  // Ramping logic for DOWN button (if held)
+  // Ramping logic for DOWN button (if held) - step size grows the longer it's held
   if (downBtnDebouncedState == LOW && downBtnHeldStartTime != 0) {
     if ((now - downBtnHeldStartTime) > RAMP_START_DELAY_MS) {
       if ((now - lastDownRampTime) > RAMP_INTERVAL_MS) {
-        rotateAction(1); // Ramp 'DOWN' movement/decrement
+        rotateAction(1, getRampStepSize(now - downBtnHeldStartTime)); // Ramp 'DOWN' movement/decrement
         lastDownRampTime = now;
       }
     }
@@ -400,8 +407,21 @@ void checkInactivity() {
 
 //------------------------------------------------------------------- BUTTON FUNCTIONS (replaces Rotary Logic)
 
+// Returns the increment size to use for a ramped repeat, based on how long the
+// button has been held in total. A quick tap always moves by 1 (handled at the
+// call site); once ramping kicks in, this grows in stages so holding sweeps
+// across the 0-100 range far faster the longer it's held.
+int getRampStepSize(unsigned long heldDurationMs) {
+  if (heldDurationMs >= RAMP_ACCEL_STAGE2_MS) return RAMP_STEP_STAGE2;
+  if (heldDurationMs >= RAMP_ACCEL_STAGE1_MS) return RAMP_STEP_STAGE1;
+  return RAMP_STEP_STAGE0;
+}
+
 // Button rotation action (triggered by UP/DOWN button presses/ramps)
-void rotateAction(int direction) {
+// amount: step size to move by - 1 for a single tap, larger while ramping.
+// Only affects Brightness/Speed (a numeric range); menu navigation and the
+// Animation cycle always move by exactly one step regardless of amount.
+void rotateAction(int direction, int amount) {
   resetInactivityTimer(); // Reset inactivity timer on any button movement
 
   // The 'direction' here will be -1 for UP button (moving up menu)
@@ -409,7 +429,7 @@ void rotateAction(int direction) {
 
   if (itemActivated) {
     // We are in a sub-menu, adjusting values
-    int adjustmentAmount = 1; // Default to fine adjustment
+    int adjustmentAmount = amount; // Step size - 1 for a tap, larger while ramping
     int effectiveDirection = direction;
 
     // Based on SUB_DIR = false:
