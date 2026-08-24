@@ -2,7 +2,7 @@
 TO DO LIST
 
 // 1. Display the menu elements as in example GUI_Dark.png 
-//2. Confirm button Input selection works to enter and exit each Menu Item
+//2. Confirm Rotary input and button selection works to enter and exit each Menu Item
 //3. Ensure Text area (Item 3) displays text from funcions.
 //4. Update Brightness Menu Item selected functionality
 //5. Update Animation Menu Item selected functionality
@@ -424,6 +424,14 @@ void rotateAction(int direction) {
     if (currentSelection == 0) { // Brightness
       tempBrightness += (effectiveDirection * adjustmentAmount);
       tempBrightness = constrain(tempBrightness, 0, 100);
+
+      // Live preview: with no animation running, push straight to the LED so
+      // a steady light dims/brightens as you scroll, not just after OK.
+      // Skipped during an animation - its own runner reads the confirmed
+      // value each toggle, so a push here could land mid-off-phase and flicker.
+      if (currentAnimation == NONE) {
+        ledcWrite(LED_PWM_PIN, brightnessToPWM(tempBrightness));
+      }
 
       // Update ONLY the active item's display
       updateMenuItemDisplay(currentSelection); 
@@ -877,13 +885,20 @@ void startBlinkAnimation() {
   if (Debug) Serial.printf("Blink animation started. Speed: %d\n", speedPercent);
 }
 
+// Live preview: while the Speed item is actively being adjusted, use the
+// in-progress value so a running animation's rate updates as you scroll,
+// instead of waiting for OK to confirm.
+int getEffectiveSpeed() {
+  return (itemActivated && currentSelection == 2) ? tempSpeed : speedPercent;
+}
+
 // Handles the logic for the Blink animation
 void runBlinkAnimation() {
-  // Map speedPercent (1-100) to an interval. BUG FIX: this was previously
+  // Map speed (1-100) to an interval. BUG FIX: this was previously
   // map(speedPercent, 1, 100, 100, 1000), which made a HIGHER speed % give a
   // LONGER interval (slower blink) - backwards for a "Speed" slider.
   // Higher speed % must give a SHORTER interval = faster blink.
-  unsigned long blinkInterval = map(speedPercent, 1, 100, 1000, 100); // 1000ms slow to 100ms fast
+  unsigned long blinkInterval = map(getEffectiveSpeed(), 1, 100, 1000, 100); // 1000ms slow to 100ms fast
 
   if (millis() - lastBlinkToggleTime >= blinkInterval) {
     lastBlinkToggleTime = millis();
@@ -912,7 +927,7 @@ void startStrobeAnimation() {
 // reads as a distinct, punchier effect rather than a fast blink. Speed still
 // controls the rate: higher speed % = shorter interval = faster strobe.
 void runStrobeAnimation() {
-  unsigned long strobeInterval = map(speedPercent, 1, 100, 200, 20); // 200ms slow to 20ms fast
+  unsigned long strobeInterval = map(getEffectiveSpeed(), 1, 100, 200, 20); // 200ms slow to 20ms fast
 
   if (millis() - lastStrobeToggleTime >= strobeInterval) {
     lastStrobeToggleTime = millis();
