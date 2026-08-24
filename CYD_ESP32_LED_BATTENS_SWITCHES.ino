@@ -2,10 +2,10 @@
 TO DO LIST
 
 // 1. Display the menu elements as in example GUI_Dark.png 
-//2. Confirm Rotary input and button selection works to enter and exit each Menu Item
+//2. Confirm button Input selection works to enter and exit each Menu Item
 //3. Ensure Text area (Item 3) displays text from funcions.
 //4. Update Brightness Menu Item selected functionality
-5. Update Animation Menu Item selected functionality
+//5. Update Animation Menu Item selected functionality
 //6. Update Speed Menu Item selected functionality
 //7. Update Speed Menu lock / unlock and style logic based on Animation Menu value
 //8. Display horizontal scrolling text placeholder// stop when screen times out
@@ -165,6 +165,17 @@ AnimationType tempAnimation = NONE;
 // --- Animation State Variables ---
 bool blinkState = false; // Current state of the blink (on/off)
 unsigned long lastBlinkToggleTime = 0; // Timestamp of last blink state change
+
+bool strobeState = false; // Current state of the strobe (on/off)
+unsigned long lastStrobeToggleTime = 0; // Timestamp of last strobe state change
+
+// Lightning is a two-phase cycle: a dark WAITING gap, then a burst of random
+// flickers (FLASHING), then back to WAITING with a new random gap.
+enum LightningPhase { LIGHTNING_WAITING, LIGHTNING_FLASHING };
+LightningPhase lightningPhase = LIGHTNING_WAITING;
+unsigned long lightningNextEventTime = 0; // millis() timestamp of the next flicker/phase change
+int lightningFlashesRemaining = 0;        // Flickers left in the current strike
+bool lightningLedOn = false;              // Current on/off state of the LED during a strike
 
 // --- Footer Scrolling Text Variables ---
 String footerText = "MODE: M | Soldiers: 192.16.1.100 / ESP32_001 user: admin We will change this later......"; // Changed to a longer placeholder
@@ -339,9 +350,11 @@ void loop() {
   // --- Animation Runner ---
   if (currentAnimation == BLINK) {
       runBlinkAnimation();
+  } else if (currentAnimation == LIGHTNING) {
+      runLightningAnimation();
+  } else if (currentAnimation == STROBE) {
+      runStrobeAnimation();
   }
-  // Add else if for other animations here later (Lightning, Strobe)
-
   // --- End Animation Runner ---
 
 
@@ -546,6 +559,12 @@ void handleSelection(int selectedItemIndex) {
       } 
       else if (currentAnimation == BLINK) {
         startBlinkAnimation(); // Start blink if selected
+      }
+      else if (currentAnimation == LIGHTNING) {
+        startLightningAnimation();
+      }
+      else if (currentAnimation == STROBE) {
+        startStrobeAnimation();
       }
 
       // Check if Animation state change affects Speed item's greyed-out status
@@ -842,7 +861,9 @@ int brightnessToPWM(int percent) {
 // Stops any currently running animation and sets the LED to a solid brightness
 void stopCurrentAnimation() {
   currentAnimation = NONE;
-  blinkState = false; // Reset blink state
+  blinkState = false;          // Reset blink state
+  strobeState = false;         // Reset strobe state
+  lightningPhase = LIGHTNING_WAITING; // Reset lightning state
   ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent));// Set to solid current brightness
   if (Debug) Serial.println("Animation stopped. LED set to solid brightness.");
 }
@@ -858,9 +879,11 @@ void startBlinkAnimation() {
 
 // Handles the logic for the Blink animation
 void runBlinkAnimation() {
-  // Map speedPercent (1-100) to an interval (e.g., 100ms fast to 1000ms slow)
-  // Higher speed = shorter interval = faster blink
-  unsigned long blinkInterval = map(speedPercent, 1, 100, 100, 1000); // 100ms to 1000ms
+  // Map speedPercent (1-100) to an interval. BUG FIX: this was previously
+  // map(speedPercent, 1, 100, 100, 1000), which made a HIGHER speed % give a
+  // LONGER interval (slower blink) - backwards for a "Speed" slider.
+  // Higher speed % must give a SHORTER interval = faster blink.
+  unsigned long blinkInterval = map(speedPercent, 1, 100, 1000, 100); // 1000ms slow to 100ms fast
 
   if (millis() - lastBlinkToggleTime >= blinkInterval) {
     lastBlinkToggleTime = millis();
@@ -871,6 +894,77 @@ void runBlinkAnimation() {
     } 
     else {
       ledcWrite(LED_PWM_PIN, 0); 
+    }
+  }
+}
+
+// Starts the strobe animation
+void startStrobeAnimation() {
+  currentAnimation = STROBE;
+  strobeState = true;
+  lastStrobeToggleTime = millis();
+  ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent)); // Initial state: ON
+  if (Debug) Serial.printf("Strobe animation started. Speed: %d\n", speedPercent);
+}
+
+// Handles the logic for the Strobe animation.
+// Same on/off toggle pattern as Blink, but a much faster interval range so it
+// reads as a distinct, punchier effect rather than a fast blink. Speed still
+// controls the rate: higher speed % = shorter interval = faster strobe.
+void runStrobeAnimation() {
+  unsigned long strobeInterval = map(speedPercent, 1, 100, 200, 20); // 200ms slow to 20ms fast
+
+  if (millis() - lastStrobeToggleTime >= strobeInterval) {
+    lastStrobeToggleTime = millis();
+    strobeState = !strobeState; // Toggle LED state
+
+    if (strobeState) {
+      ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent));
+    } else {
+      ledcWrite(LED_PWM_PIN, 0);
+    }
+  }
+}
+
+// Starts the lightning animation
+void startLightningAnimation() {
+  currentAnimation = LIGHTNING;
+  lightningPhase = LIGHTNING_WAITING;
+  lightningLedOn = false;
+  ledcWrite(LED_PWM_PIN, 0); // Start dark, waiting for the first strike
+  lightningNextEventTime = millis() + random(500, 3000); // Random gap before first strike
+  if (Debug) Serial.println("Lightning animation started.");
+}
+
+// Handles the logic for the Lightning animation: random dark gaps (WAITING)
+// followed by a burst of irregular on/off flickers (FLASHING) to mimic a
+// real lightning strike. Non-blocking - uses millis() timestamps, no delay().
+// Note: ESP32's random() is seeded from the hardware RNG automatically, so no
+// randomSeed() call is needed in setup().
+void runLightningAnimation() {
+  unsigned long now = millis();
+  if (now < lightningNextEventTime) return; // Not time for the next event yet
+
+  if (lightningPhase == LIGHTNING_WAITING) {
+    // Begin a new strike: a short burst of random flickers
+    lightningPhase = LIGHTNING_FLASHING;
+    lightningFlashesRemaining = random(3, 8); // 3-7 flickers per strike
+    lightningLedOn = true;
+    ledcWrite(LED_PWM_PIN, brightnessToPWM(brightnessPercent));
+    lightningNextEventTime = now + random(20, 80); // Irregular flicker timing
+  } else { // LIGHTNING_FLASHING
+    lightningLedOn = !lightningLedOn;
+    ledcWrite(LED_PWM_PIN, lightningLedOn ? brightnessToPWM(brightnessPercent) : 0);
+    lightningFlashesRemaining--;
+
+    if (lightningFlashesRemaining <= 0) {
+      // Strike finished - go dark and wait for the next one
+      lightningPhase = LIGHTNING_WAITING;
+      ledcWrite(LED_PWM_PIN, 0);
+      lightningNextEventTime = now + random(500, 3000);
+      if (Debug) Serial.println("Lightning strike finished, waiting for next.");
+    } else {
+      lightningNextEventTime = now + random(20, 80);
     }
   }
 }
