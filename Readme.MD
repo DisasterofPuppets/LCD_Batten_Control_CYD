@@ -55,6 +55,10 @@ I have two lights, but the maximum is **264 LEDs per PSU**.
 | LEFT (–) button | 35 | Input only. Needs the external 10k pull-up. |
 | RIGHT (+) button | 22 | 10k pull-up + 100nF |
 | OK / Enter button | 27 | 10k pull-up + 100nF |
+
+Manually solder to the below pads to access GPIO25 and another ground:
+![Solder Points](.images/CYD_Soldering_Guide.png)
+
 | LED PWM out → MOSFET TRIG/PWM | 25 | **Solder directly to the ESP32 module.** It's the 5th pin up from the bottom-left corner. |
 | Ground | GND | **Solder directly to the ESP32 module.** It's the top-right pin, next to the antenna shield. |
 
