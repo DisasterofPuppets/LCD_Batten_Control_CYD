@@ -2,14 +2,16 @@
 
 **ChannelLED** is an ESP32 light controller for custom LED battens, built on the **Cheap Yellow Display** (ESP32-2432S028R).
 
-Three physical buttons and a glowing on-screen menu control the brightness, animation and speed of the lights. Several lights can be linked wirelessly over **ESP-NOW**: set one and the rest follow. No Wi-Fi network or router is needed.
+Three physical buttons and a glowing on-screen menu control the brightness, animation and speed of the lights. 
+Several lights can be linked wirelessly over **ESP-NOW**: set one and the rest follow. 
+No Wi-Fi network or router is needed.
 
 ---
 
 ## What it does
 
 - **Dims LED battens** smoothly from 0–100% using PWM through a dual-MOSFET module
-- **Runs animations:** None, Blink, Lightning, Strobe and Chase. Chase pulses each linked light in turn.
+- **Runs animations:** None, Blink, Lightning, Strobe and Chase. Chase pulses each linked light in turn. (white LEDs only at this stage.)
 - **Links multiple lights** wirelessly:
   - **Host:** leads the group. Only one per group.
   - **Client:** follows the Host and reconnects automatically if it drops out.
